@@ -24,8 +24,6 @@ TEST_F(ExtractFunctionTest, FunctionTest) {
 
   // Root statements should have common parent.
   EXPECT_EQ(apply("for(;;) [[1+2; 1+2;]]"), "unavailable");
-  // Expressions aren't extracted.
-  EXPECT_EQ(apply("int x = 0; [[x++;]]"), "unavailable");
   // We don't support extraction from lambdas.
   EXPECT_EQ(apply("auto lam = [](){ [[int x;]] }; "), "unavailable");
   // Partial statements aren't extracted.
@@ -190,6 +188,16 @@ F (extracted();)
     }]]
   )cpp";
   EXPECT_EQ(apply(CompoundFailInput), "unavailable");
+
+  std::string CompoundWithMultipleStatementsFailInput = R"cpp(
+    void f() [[{
+      int a = 1;
+      int b = 2;
+      ++b;
+      b += a;
+    }]]
+  )cpp";
+  EXPECT_EQ(apply(CompoundWithMultipleStatementsFailInput), "unavailable");
 }
 
 TEST_F(ExtractFunctionTest, DifferentHeaderSourceTest) {
@@ -569,6 +577,795 @@ int getNum(bool Superstitious, int Min, int Max) {
     }
   )cpp";
   EXPECT_EQ(apply(Before), After);
+}
+
+TEST_F(ExtractFunctionTest, Expressions) {
+  std::vector<std::pair<std::string, std::string>> InputOutputs{
+      // FULL BINARY EXPRESSIONS
+      // Full binary expression, basic maths
+      {R"cpp(
+void wrapperFun() {
+  double a{2.0}, b{3.2}, c{31.55};
+  double v{[[b * b - 4 * a * c]]};
+}
+      )cpp",
+       R"cpp(
+double extracted(double &a, double &b, double &c) {
+return b * b - 4 * a * c;
+}
+void wrapperFun() {
+  double a{2.0}, b{3.2}, c{31.55};
+  double v{extracted(a, b, c)};
+}
+      )cpp"},
+      // Full binary expression composed of '+' operator overloads ops
+      {
+          R"cpp(
+struct S {
+  S operator+(const S&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  S operator+(const S&) {
+    return *this;
+  }
+};
+S extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
+      // Boolean predicate as expression
+      {
+          R"cpp(
+void wrapperFun() {
+  int a{1};
+  auto R{[[a > 1]]};
+}
+      )cpp",
+          R"cpp(
+bool extracted(int &a) {
+return a > 1;
+}
+void wrapperFun() {
+  int a{1};
+  auto R{extracted(a)};
+}
+      )cpp"},
+      // Expression: captures no global variable
+      {R"cpp(
+static int a{2};
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{[[a + b + c + d]]};
+}
+      )cpp",
+       R"cpp(
+static int a{2};
+int extracted(int &b, int &c, int &d) {
+return a + b + c + d;
+}
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{extracted(b, c, d)};
+}
+      )cpp"},
+      // Full expr: infers return type of call returning by ref
+      {
+          R"cpp(
+struct S {
+  S& operator+(const S&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  S& operator+(const S&) {
+    return *this;
+  }
+};
+S & extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
+      // Full expr: infers return type of call returning by const-ref
+      {
+          R"cpp(
+struct S {
+  const S& operator+(const S&) const {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  const S& operator+(const S&) const {
+    return *this;
+  }
+};
+const S & extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
+      // Captures deeply nested arguments
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{[[fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f))]]};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &a, int &b, int &c, int &d, int &e, int &f) {
+return fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{extracted(a, b, c, d, e, f)};
+}
+      )cpp"},
+      // SUBEXPRESSIONS
+      // Left-aligned subexpression
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{[[a + b]] + c + d};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &a, int &b) {
+return a + b;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{extracted(a, b) + c + d};
+}
+      )cpp"},
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{[[a + b + c]] + d};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &a, int &b, int &c) {
+return a + b + c;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{extracted(a, b, c) + d};
+}
+      )cpp"},
+      // Subexpression from the middle
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + [[b + c + d]] + e};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &b, int &c, int &d) {
+return b + c + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + extracted(b, c, d) + e};
+}
+      )cpp"},
+      // Right-aligned subexpression
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + b + [[c + d + e]]};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &c, int &d, int &e) {
+return c + d + e;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + b + extracted(c, d, e)};
+}
+      )cpp"},
+      // Larger subexpression from the middle
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + [[a + b + c + d]] + c};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &a, int &b, int &c, int &d) {
+return a + b + c + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + extracted(a, b, c, d) + c};
+}
+      )cpp"},
+      // Subexpression with duplicated references
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + b + [[c + c + c + d + d]] + c};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &c, int &d) {
+return c + c + c + d + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + b + extracted(c, d) + c};
+}
+      )cpp"},
+      // Subexpression: captures no global variable
+      {R"cpp(
+static int a{2};
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{[[a + b + c]] + d};
+}
+      )cpp",
+       R"cpp(
+static int a{2};
+int extracted(int &b, int &c) {
+return a + b + c;
+}
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{extracted(b, c) + d};
+}
+      )cpp"},
+      // Subexpression: infers return type of call returning by ref, LHS
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto LS3{[[LS1.get()]] + LS2};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1) {
+return LS1.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto LS3{extracted(LS1) + LS2};
+}
+      )cpp"},
+      // Subexpression: infers return type of call returning by ref, most-RHS
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3;
+  auto LS4{LS1 + LS2 + [[LS3.get()]]};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS3) {
+return LS3.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3;
+  auto LS4{LS1 + LS2 + extracted(LS3)};
+}
+      )cpp"},
+      // Subexpression: infers return type of call returning by ref, middle RHS
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct getCopy() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3;
+  auto LS4{LS1.getCopy() + [[LS2.get()]] + LS3};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct getCopy() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS2) {
+return LS2.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3;
+  auto LS4{LS1.getCopy() + extracted(LS2) + LS3};
+}
+      )cpp"},
+      // Subexpr: infers return type of call returning by const-ref
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto LS3{LS1 + [[LS2.get()]]};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+const LargeStruct & extracted(LargeStruct &LS2) {
+return LS2.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto LS3{LS1 + extracted(LS2)};
+}
+      )cpp"},
+      // Subexpression on operator overload, left-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{[[LS1 + LS2.get()]] + LS3.get() + LS4};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1, LargeStruct &LS2) {
+return LS1 + LS2.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{extracted(LS1, LS2) + LS3.get() + LS4};
+}
+      )cpp"},
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{[[LS1 + LS2.get() + LS3.get()]] + LS4};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1, LargeStruct &LS2, LargeStruct &LS3) {
+return LS1 + LS2.get() + LS3.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{extracted(LS1, LS2, LS3) + LS4};
+}
+      )cpp"},
+      // Subexpression on operator overload, middle-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + [[LS2.get() + LS3 + LS4.get()]] + LS5};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS2, LargeStruct &LS3, LargeStruct &LS4) {
+return LS2.get() + LS3 + LS4.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + extracted(LS2, LS3, LS4) + LS5};
+}
+      )cpp"},
+      // Subexpression on operator overload, right-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + LS2.get() + [[LS3 + LS4.get() + LS5]]};
+})cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS3, LargeStruct &LS4, LargeStruct &LS5) {
+return LS3 + LS4.get() + LS5;
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + LS2.get() + extracted(LS3, LS4, LS5)};
+})cpp"},
+      // Boolean predicate as subexpression
+      {
+          R"cpp(
+void wrapperFun() {
+  int a{1}, b{2};
+  auto R{a > 1 ? [[b <= 0]] : false};
+}
+      )cpp",
+          R"cpp(
+bool extracted(int &b) {
+return b <= 0;
+}
+void wrapperFun() {
+  int a{1}, b{2};
+  auto R{a > 1 ? extracted(b) : false};
+}
+      )cpp"},
+      // Collects deeply nested arguments, left-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{[[fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e))))]] + fw(fw(f))};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &a, int &b, int &c, int &d, int &e) {
+return fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e))));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{extracted(a, b, c, d, e) + fw(fw(f))};
+}
+      )cpp"},
+      // Collects deeply nested arguments, middle-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + [[fw(fw(add(b, c))) + fw(fw(fw(add(d, e))))]] + fw(fw(f))};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &b, int &c, int &d, int &e) {
+return fw(fw(add(b, c))) + fw(fw(fw(add(d, e))));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + extracted(b, c, d, e) + fw(fw(f))};
+}
+      )cpp"},
+      // Collects deeply nested arguments, right-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + [[fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f))]]};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &b, int &c, int &d, int &e, int &f) {
+return fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + extracted(b, c, d, e, f)};
+}
+      )cpp"},
+      // FIXME: Support macros: In this case the most-LHS is not omitted!
+      {R"cpp(
+#define ECHO(X) X
+void f() {
+    int x = 1 + [[ECHO(2 + 3) + 4]] + 5;
+})cpp",
+       R"cpp(
+#define ECHO(X) X
+int extracted() {
+return 1 + ECHO(2 + 3) + 4;
+}
+void f() {
+    int x = extracted() + 5;
+})cpp"},
+  };
+
+  for (const auto &[Input, Output] : InputOutputs) {
+    EXPECT_EQ(Output, apply(Input)) << Input;
+  }
+}
+
+TEST_F(ExtractFunctionTest, ExpressionsInMethodsSingleFile) {
+  // TODO: unavailable
+  // TODO: available
+
+  std::vector<std::pair<std::string, std::string>> InputOutputs{
+      // Expression: Does not capture members as parameters
+      // FIXME: If selected area does mutate members, make extracted() const
+      {R"cpp(
+struct S {
+void f() const {
+    int a{1}, b{2};
+    auto r{[[a + b + mem1 + mem2]]};
+}
+int mem1{0}, mem2{0};
+};
+)cpp",
+       R"cpp(
+struct S {
+int extracted(int &a, int &b) const {
+return a + b + mem1 + mem2;
+}
+void f() const {
+    int a{1}, b{2};
+    auto r{extracted(a, b)};
+}
+int mem1{0}, mem2{0};
+};
+)cpp"},
+      // Subexpression: Does not capture members as parameters
+      {R"cpp(
+struct S {
+void f() const {
+    int a{1}, b{2};
+    auto r{a + [[mem1 + mem2 + b + mem1]] + mem2};
+}
+int mem1{0}, mem2{0};
+};
+)cpp",
+       R"cpp(
+struct S {
+int extracted(int &b) const {
+return mem1 + mem2 + b + mem1;
+}
+void f() const {
+    int a{1}, b{2};
+    auto r{a + extracted(b) + mem2};
+}
+int mem1{0}, mem2{0};
+};
+)cpp"},
+  };
+
+  for (const auto &[Input, Output] : InputOutputs) {
+    EXPECT_EQ(Output, apply(Input)) << Input;
+  }
+}
+
+TEST_F(ExtractFunctionTest, ExpressionInMethodMultiFile) {
+  Header = R"cpp(
+    class SomeClass {
+      void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  std::string OutOfLineSource = R"cpp(
+    void SomeClass::f() {
+      int a{1}, b{2};
+      int x = [[a + mem1 + b + mem2]];
+    }
+  )cpp";
+
+  std::string OutOfLineSourceOutputCheck = R"cpp(
+    int SomeClass::extracted(int &a, int &b) {
+return a + mem1 + b + mem2;
+}
+void SomeClass::f() {
+      int a{1}, b{2};
+      int x = extracted(a, b);
+    }
+  )cpp";
+
+  std::string HeaderOutputCheck = R"cpp(
+    class SomeClass {
+      int extracted(int &a, int &b);
+void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  llvm::StringMap<std::string> EditedFiles;
+
+  EXPECT_EQ(apply(OutOfLineSource, &EditedFiles), OutOfLineSourceOutputCheck);
+  EXPECT_EQ(EditedFiles.begin()->second, HeaderOutputCheck);
+}
+
+TEST_F(ExtractFunctionTest, SubexpressionInMethodMultiFile) {
+  Header = R"cpp(
+    class SomeClass {
+      void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  std::string OutOfLineSource = R"cpp(
+    void SomeClass::f() {
+      int a{1}, b{2};
+      int x = a + [[mem1 + b + mem2]] + mem1;
+    }
+  )cpp";
+
+  std::string OutOfLineSourceOutputCheck = R"cpp(
+    int SomeClass::extracted(int &b) {
+return mem1 + b + mem2;
+}
+void SomeClass::f() {
+      int a{1}, b{2};
+      int x = a + extracted(b) + mem1;
+    }
+  )cpp";
+
+  std::string HeaderOutputCheck = R"cpp(
+    class SomeClass {
+      int extracted(int &b);
+void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  llvm::StringMap<std::string> EditedFiles;
+
+  EXPECT_EQ(apply(OutOfLineSource, &EditedFiles), OutOfLineSourceOutputCheck);
+  EXPECT_EQ(EditedFiles.begin()->second, HeaderOutputCheck);
 }
 
 } // namespace

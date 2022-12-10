@@ -56,9 +56,12 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
@@ -72,6 +75,9 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_os_ostream.h"
+
+#include <algorithm>
+#include <optional>
 
 namespace clang {
 namespace clangd {
@@ -94,6 +100,208 @@ enum FunctionDeclKind {
   ForwardDeclaration,
   OutOfLineDefinition
 };
+
+// Helpers for handling "binary subexpressions" like a + [[b + c]] + d. This is
+// taken from ExtractVariable, and adapted a little to handle collection of
+// parameters.
+struct ExtractedBinarySubexpressionSelection;
+
+class BinarySubexpressionSelection {
+
+public:
+  static inline std::optional<BinarySubexpressionSelection>
+  tryParse(const SelectionTree::Node &N, const SourceManager *SM) {
+    if (const BinaryOperator *Op =
+            llvm::dyn_cast_or_null<BinaryOperator>(N.ASTNode.get<Expr>())) {
+      return BinarySubexpressionSelection{SM, Op->getOpcode(), Op->getExprLoc(),
+                                          N.Children};
+    }
+    if (const CXXOperatorCallExpr *Op =
+            llvm::dyn_cast_or_null<CXXOperatorCallExpr>(
+                N.ASTNode.get<Expr>())) {
+      if (!Op->isInfixBinaryOp())
+        return std::nullopt;
+
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOps;
+      // Not all children are args, there's also the callee (operator).
+      for (const auto *Child : N.Children) {
+        const Expr *E = Child->ASTNode.get<Expr>();
+        assert(E && "callee and args should be Exprs!");
+        if (E == Op->getArg(0) || E == Op->getArg(1))
+          SelectedOps.push_back(Child);
+      }
+      return BinarySubexpressionSelection{
+          SM, BinaryOperator::getOverloadedOpcode(Op->getOperator()),
+          Op->getExprLoc(), std::move(SelectedOps)};
+    }
+    return std::nullopt;
+  }
+
+  bool associative() const {
+    // Must also be left-associative!
+    switch (Kind) {
+    case BO_Add:
+    case BO_Mul:
+    case BO_And:
+    case BO_Or:
+    case BO_Xor:
+    case BO_LAnd:
+    case BO_LOr:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  bool crossesMacroBoundary() const {
+    FileID F = SM->getFileID(ExprLoc);
+    for (const SelectionTree::Node *Child : SelectedOperations)
+      if (SM->getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
+        return true;
+    return false;
+  }
+
+  bool isExtractable() const {
+    return associative() and not crossesMacroBoundary();
+  }
+
+  void dumpSelectedOperations(llvm::raw_ostream &Os,
+                              const ASTContext &Cont) const {
+    for (const auto *Op : SelectedOperations)
+      Op->ASTNode.dump(Os, Cont);
+  }
+
+  std::optional<ExtractedBinarySubexpressionSelection> tryExtract() const;
+
+protected:
+  struct SelectedOperands {
+    llvm::SmallVector<const SelectionTree::Node *> Operands;
+    const SelectionTree::Node *Start;
+    const SelectionTree::Node *End;
+  };
+
+private:
+  BinarySubexpressionSelection(
+      const SourceManager *SM, BinaryOperatorKind Kind, SourceLocation ExprLoc,
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOps)
+      : SM{SM}, Kind(Kind), ExprLoc(ExprLoc),
+        SelectedOperations(std::move(SelectedOps)) {}
+
+  SelectedOperands getSelectedOperands() const {
+    auto [Start, End]{getClosedRangeWithSelectedOperations()};
+
+    llvm::SmallVector<const SelectionTree::Node *> Operands;
+    Operands.reserve(SelectedOperations.size());
+    const SelectionTree::Node *BinOpSelectionIt{Start->Parent};
+
+    // Edge case: the selection starts from the most-left LHS, e.g. [[a+b+c]]+d
+    if (BinOpSelectionIt->Children.size() == 2)
+      Operands.emplace_back(BinOpSelectionIt->Children.front()); // LHS
+    // In case of operator+ call, the Children will contain the calle as well.
+    else if (BinOpSelectionIt->Children.size() == 3)
+      Operands.emplace_back(BinOpSelectionIt->Children[1]); // LHS
+
+    // Go up the Binary Operation three, up to the most-right RHS
+    for (; BinOpSelectionIt->Children.back() != End;
+         BinOpSelectionIt = BinOpSelectionIt->Parent)
+      Operands.emplace_back(BinOpSelectionIt->Children.back()); // RHS
+    // Remember to add the most-right RHS
+    Operands.emplace_back(End);
+
+    SelectedOperands Ops;
+    Ops.Start = Start;
+    Ops.End = End;
+    Ops.Operands = std::move(Operands);
+    return Ops;
+  }
+
+  std::pair<const SelectionTree::Node *, const SelectionTree::Node *>
+  getClosedRangeWithSelectedOperations() const {
+    BinaryOperatorKind OuterOp = Kind;
+    // Because the tree we're interested in contains only one operator type, and
+    // all eligible operators are left-associative, the shape of the tree is
+    // very restricted: it's a linked list along the left edges.
+    // This simplifies our implementation.
+    const SelectionTree::Node *Start = SelectedOperations.front(); // LHS
+    const SelectionTree::Node *End = SelectedOperations.back();    // RHS
+
+    // End is already correct: it can't be an OuterOp (as it's
+    // left-associative). Start needs to be pushed down int the subtree to the
+    // right spot.
+    while (true) {
+      auto MaybeOp{tryParse(Start->ignoreImplicit(), SM)};
+      if (not MaybeOp)
+        break;
+      const auto &Op{*MaybeOp};
+      if (Op.Kind != OuterOp or Op.crossesMacroBoundary())
+        break;
+      assert(!Op.SelectedOperations.empty() &&
+             "got only operator on one side!");
+      if (Op.SelectedOperations.size() == 1) { // Only Op.RHS selected
+        Start = Op.SelectedOperations.back();
+        break;
+      }
+      // Op.LHS is (at least partially) selected, so descend into it.
+      Start = Op.SelectedOperations.front();
+    }
+    return {Start, End};
+  }
+
+protected:
+  const SourceManager *SM;
+  BinaryOperatorKind Kind;
+  SourceLocation ExprLoc;
+  // May also contain partially selected operations,
+  // e.g. a + [[b + c]], will keep (a + b) BinaryOperator.
+  llvm::SmallVector<const SelectionTree::Node *> SelectedOperations;
+};
+
+struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
+  ExtractedBinarySubexpressionSelection(BinarySubexpressionSelection BinSubexpr,
+                                        SelectedOperands SelectedOps)
+      : BinarySubexpressionSelection::BinarySubexpressionSelection(
+            std::move(BinSubexpr)),
+        Operands{std::move(SelectedOps)} {}
+
+  SourceRange getRange(const LangOptions &LangOpts) const {
+    auto MakeHalfOpenFileRange{[&](const SelectionTree::Node *N) {
+      return toHalfOpenFileRange(*SM, LangOpts, N->ASTNode.getSourceRange());
+    }};
+
+    return SourceRange(MakeHalfOpenFileRange(Operands.Start)->getBegin(),
+                       MakeHalfOpenFileRange(Operands.End)->getEnd());
+  }
+
+  void dumpSelectedOperands(llvm::raw_ostream &Os,
+                            const ASTContext &Cont) const {
+    for (const auto *Op : Operands.Operands)
+      Op->ASTNode.dump(Os, Cont);
+  }
+
+  llvm::SmallVector<const DeclRefExpr *>
+  collectReferences(ASTContext &Cont) const {
+    llvm::SmallVector<const DeclRefExpr *> Refs;
+    auto Matcher{
+        ast_matchers::findAll(ast_matchers::declRefExpr().bind("ref"))};
+    for (const auto *SelNode : Operands.Operands) {
+      auto Matches{ast_matchers::match(Matcher, SelNode->ASTNode, Cont)};
+      for (const auto &Match : Matches)
+        if (const DeclRefExpr * Ref{Match.getNodeAs<DeclRefExpr>("ref")}; Ref)
+          Refs.push_back(Ref);
+    }
+    return Refs;
+  }
+
+private:
+  SelectedOperands Operands;
+};
+
+std::optional<ExtractedBinarySubexpressionSelection>
+BinarySubexpressionSelection::tryExtract() const {
+  if (not isExtractable())
+    return std::nullopt;
+  return ExtractedBinarySubexpressionSelection{*this, getSelectedOperands()};
+}
 
 // A RootStmt is a statement that's fully selected including all it's children
 // and it's parent is unselected.
@@ -127,6 +335,11 @@ const Node *getParentOfRootStmts(const Node *CommonAnc) {
   const Node *Parent = nullptr;
   switch (CommonAnc->Selected) {
   case SelectionTree::Selection::Unselected:
+    // Workaround for an operator call: BinaryOperator will be selecteded
+    // completely, but the operator call would be unselected, thus we treat it
+    // as it would be completely selected.
+    if (CommonAnc->ASTNode.get<CXXOperatorCallExpr>() != nullptr)
+      return CommonAnc->Parent;
     // Typically a block, with the { and } unselected, could also be ForStmt etc
     // Ensure all Children are RootStmts.
     Parent = CommonAnc;
@@ -152,6 +365,7 @@ const Node *getParentOfRootStmts(const Node *CommonAnc) {
 
 // The ExtractionZone class forms a view of the code wrt Zone.
 struct ExtractionZone {
+  const Node *CommonAncestor;
   // Parent of RootStatements being extracted.
   const Node *Parent = nullptr;
   // The half-open file range of the code being extracted.
@@ -162,6 +376,8 @@ struct ExtractionZone {
   SourceRange EnclosingFuncRange;
   // Set of statements that form the ExtractionZone.
   llvm::DenseSet<const Stmt *> RootStmts;
+  // If the extraction zone is a "binary subexpression", then this will be set.
+  std::optional<BinarySubexpressionSelection> MaybeBinarySubexpr;
 
   SourceLocation getInsertionPoint() const {
     return EnclosingFuncRange.getBegin();
@@ -292,20 +508,12 @@ computeEnclosingFuncRange(const FunctionDecl *EnclosingFunction,
   return toHalfOpenFileRange(SM, LangOpts, EnclosingFunction->getSourceRange());
 }
 
-// returns true if Child can be a single RootStmt being extracted from
-// EnclosingFunc.
-bool validSingleChild(const Node *Child, const FunctionDecl *EnclosingFunc) {
-  // Don't extract expressions.
-  // FIXME: We should extract expressions that are "statements" i.e. not
-  // subexpressions
-  if (Child->ASTNode.get<Expr>())
-    return false;
-  // Extracting the body of EnclosingFunc would remove it's definition.
-  assert(EnclosingFunc->hasBody() &&
+bool isEntireFunctionBodySelected(const ExtractionZone &ExtZone) {
+  assert(ExtZone.EnclosingFunction->hasBody() &&
          "We should always be extracting from a function body.");
-  if (Child->ASTNode.get<Stmt>() == EnclosingFunc->getBody())
-    return false;
-  return true;
+  return ExtZone.Parent->Children.size() == 1 &&
+         ExtZone.getLastRootStmt()->ASTNode.get<Stmt>() ==
+             ExtZone.EnclosingFunction->getBody();
 }
 
 // FIXME: Check we're not extracting from the initializer/condition of a control
@@ -314,16 +522,27 @@ llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
                                                   const SourceManager &SM,
                                                   const LangOptions &LangOpts) {
   ExtractionZone ExtZone;
+  ExtZone.CommonAncestor = CommonAnc;
+  auto MaybeBinarySubexpr{
+      BinarySubexpressionSelection::tryParse(CommonAnc->ignoreImplicit(), &SM)};
+  if (MaybeBinarySubexpr) {
+    // FIXME: We shall not allow the user to extract expressions which we don't
+    // support, or which are weirdly selected (e.g. a [[+ b + c]]). If the
+    // selected subexpression is an entire expression (not only a part of
+    // expression), then we don't need the BinarySubexpressionSelection.
+    if (const auto &BinarySubexpr{*MaybeBinarySubexpr};
+        BinarySubexpr.isExtractable()) {
+      ExtZone.MaybeBinarySubexpr = std::move(MaybeBinarySubexpr);
+    }
+  }
   ExtZone.Parent = getParentOfRootStmts(CommonAnc);
   if (!ExtZone.Parent || ExtZone.Parent->Children.empty())
     return std::nullopt;
   ExtZone.EnclosingFunction = findEnclosingFunction(ExtZone.Parent);
   if (!ExtZone.EnclosingFunction)
     return std::nullopt;
-  // When there is a single RootStmt, we must check if it's valid for
-  // extraction.
-  if (ExtZone.Parent->Children.size() == 1 &&
-      !validSingleChild(ExtZone.getLastRootStmt(), ExtZone.EnclosingFunction))
+  // Extracting the body of EnclosingFunc would remove it's definition.
+  if (isEntireFunctionBodySelected(ExtZone))
     return std::nullopt;
   if (auto FuncRange =
           computeEnclosingFuncRange(ExtZone.EnclosingFunction, SM, LangOpts))
@@ -367,6 +586,7 @@ struct NewFunction {
   bool Static = false;
   ConstexprSpecKind Constexpr = ConstexprSpecKind::Unspecified;
   bool Const = false;
+  bool Expression = false;
 
   // Decides whether the extracted function body and the function call need a
   // semicolon after extraction.
@@ -495,8 +715,11 @@ std::string NewFunction::getFuncBody(const SourceManager &SM) const {
   // - hoist decls
   // - add return statement
   // - Add semicolon
-  return toSourceCode(SM, BodyRange).str() +
-         (SemicolonPolicy.isNeededInExtractedFunction() ? ";" : "");
+  auto NewBody{toSourceCode(SM, BodyRange).str() +
+               (SemicolonPolicy.isNeededInExtractedFunction() ? ";" : "")};
+  if (Expression)
+    return "return " + NewBody;
+  return NewBody;
 }
 
 std::string NewFunction::Parameter::render(const DeclContext *Context) const {
@@ -530,6 +753,7 @@ struct CapturedZoneInfo {
   // FIXME: Capture type information as well.
   DeclInformation *createDeclInfo(const Decl *D, ZoneRelative RelativeLoc);
   DeclInformation *getDeclInfoFor(const Decl *D);
+  const DeclInformation *getDeclInfoFor(const Decl *D) const;
 };
 
 CapturedZoneInfo::DeclInformation *
@@ -543,7 +767,14 @@ CapturedZoneInfo::createDeclInfo(const Decl *D, ZoneRelative RelativeLoc) {
 
 CapturedZoneInfo::DeclInformation *
 CapturedZoneInfo::getDeclInfoFor(const Decl *D) {
-  // If the Decl doesn't exist, we
+  auto Iter = DeclInfoMap.find(D);
+  if (Iter == DeclInfoMap.end())
+    return nullptr;
+  return &Iter->second;
+}
+
+const CapturedZoneInfo::DeclInformation *
+CapturedZoneInfo::getDeclInfoFor(const Decl *D) const {
   auto Iter = DeclInfoMap.find(D);
   if (Iter == DeclInfoMap.end())
     return nullptr;
@@ -664,12 +895,29 @@ CapturedZoneInfo captureZoneInfo(const ExtractionZone &ExtZone) {
   return Result;
 }
 
-// Adds parameters to ExtractedFunc.
-// Returns true if able to find the parameters successfully and no hoisting
-// needed.
+static const ValueDecl *unpackDeclForParameter(const Decl *D) {
+  const ValueDecl *VD = dyn_cast_or_null<ValueDecl>(D);
+  // Can't parameterise if the Decl isn't a ValueDecl or is a FunctionDecl
+  // (this includes the case of recursive call to EnclosingFunc in Zone).
+  if (!VD || isa<FunctionDecl>(D))
+    return nullptr;
+  return VD;
+}
+
+static QualType getParameterTypeInfo(const ValueDecl *VD) {
+  // Parameter qualifiers are same as the Decl's qualifiers.
+  return VD->getType().getNonReferenceType();
+}
+
+using Parameters = std::vector<NewFunction::Parameter>;
+using MaybeParameters = std::optional<Parameters>;
+
 // FIXME: Check if the declaration has a local/anonymous type
-bool createParameters(NewFunction &ExtractedFunc,
-                      const CapturedZoneInfo &CapturedInfo) {
+// Returns actual parameters if able to find the parameters successfully and no
+// hoisting needed.
+static MaybeParameters
+createParamsForNoSubexpr(const CapturedZoneInfo &CapturedInfo) {
+  std::vector<NewFunction::Parameter> Params;
   for (const auto &KeyVal : CapturedInfo.DeclInfoMap) {
     const auto &DeclInfo = KeyVal.second;
     // If a Decl was Declared in zone and referenced in post zone, it
@@ -677,20 +925,16 @@ bool createParameters(NewFunction &ExtractedFunc,
     // FIXME: Support Decl Hoisting.
     if (DeclInfo.DeclaredIn == ZoneRelative::Inside &&
         DeclInfo.IsReferencedInPostZone)
-      return false;
+      return std::nullopt;
     if (!DeclInfo.IsReferencedInZone)
       continue; // no need to pass as parameter, not referenced
     if (DeclInfo.DeclaredIn == ZoneRelative::Inside ||
         DeclInfo.DeclaredIn == ZoneRelative::OutsideFunc)
       continue; // no need to pass as parameter, still accessible.
-    // Parameter specific checks.
-    const ValueDecl *VD = dyn_cast_or_null<ValueDecl>(DeclInfo.TheDecl);
-    // Can't parameterise if the Decl isn't a ValueDecl or is a FunctionDecl
-    // (this includes the case of recursive call to EnclosingFunc in Zone).
-    if (!VD || isa<FunctionDecl>(DeclInfo.TheDecl))
-      return false;
-    // Parameter qualifiers are same as the Decl's qualifiers.
-    QualType TypeInfo = VD->getType().getNonReferenceType();
+    const auto *VD{unpackDeclForParameter(DeclInfo.TheDecl)};
+    if (VD == nullptr)
+      return std::nullopt;
+    QualType TypeInfo{getParameterTypeInfo(VD)};
     // FIXME: Need better qualifier checks: check mutated status for
     // Decl(e.g. was it assigned, passed as nonconst argument, etc)
     // FIXME: check if parameter will be a non l-value reference.
@@ -698,12 +942,61 @@ bool createParameters(NewFunction &ExtractedFunc,
     // pointers, etc by reference.
     bool IsPassedByReference = true;
     // We use the index of declaration as the ordering priority for parameters.
-    ExtractedFunc.Parameters.push_back({std::string(VD->getName()), TypeInfo,
-                                        IsPassedByReference,
-                                        DeclInfo.DeclIndex});
+    Params.push_back({std::string(VD->getName()), TypeInfo, IsPassedByReference,
+                      DeclInfo.DeclIndex});
   }
-  llvm::sort(ExtractedFunc.Parameters);
-  return true;
+  llvm::sort(Params);
+  return Params;
+}
+
+static MaybeParameters
+createParamsForSubexpr(const CapturedZoneInfo &CapturedInfo,
+                       const ExtractedBinarySubexpressionSelection &Subexpr,
+                       ASTContext &ASTCont) {
+  // We use the the Set here, to avoid duplicates, but since the Set will not
+  // care about the order, we need to use a vector to collect the unique
+  // references in the order of referencing.
+  llvm::SmallVector<const ValueDecl *> RefsAsDecls;
+  llvm::DenseSet<const ValueDecl *> UniqueRefsAsDecls;
+
+  for (const auto *Ref : Subexpr.collectReferences(ASTCont)) {
+    const auto *D{Ref->getDecl()};
+    const auto *VD{unpackDeclForParameter(D)};
+    // Only collect the ValueDecl-s.
+    if (VD == nullptr)
+      continue;
+    const auto *DeclInfo{CapturedInfo.getDeclInfoFor(D)};
+    if (DeclInfo == nullptr or DeclInfo->DeclaredIn != ZoneRelative::Before)
+      continue;
+    auto [It, IsNew]{UniqueRefsAsDecls.insert(VD)};
+    if (IsNew)
+      RefsAsDecls.emplace_back(VD);
+  }
+
+  std::vector<NewFunction::Parameter> Params;
+  std::transform(std::begin(RefsAsDecls), std::end(RefsAsDecls),
+                 std::back_inserter(Params), [](const ValueDecl *VD) {
+                   QualType TypeInfo{getParameterTypeInfo(VD)};
+                   // FIXME: Need better qualifier checks: check mutated status
+                   // for Decl(e.g. was it assigned, passed as nonconst
+                   // argument, etc)
+                   // FIXME: check if parameter will be a non l-value reference.
+                   // FIXME: We don't want to always pass variables of types
+                   // like int, pointers, etc by reference.
+                   bool IsPassedByRef = true;
+                   return NewFunction::Parameter{std::string(VD->getName()),
+                                                 TypeInfo, IsPassedByRef, 0};
+                 });
+  return Params;
+}
+
+// Adds parameters to ExtractedFunc.
+MaybeParameters createParams(
+    const std::optional<ExtractedBinarySubexpressionSelection> &MaybeSubexpr,
+    const CapturedZoneInfo &CapturedInfo, ASTContext &ASTCont) {
+  if (MaybeSubexpr)
+    return createParamsForSubexpr(CapturedInfo, *MaybeSubexpr, ASTCont);
+  return createParamsForNoSubexpr(CapturedInfo);
 }
 
 // Clangd uses open ranges while ExtractionSemicolonPolicy (in Clang Tooling)
@@ -723,29 +1016,47 @@ getSemicolonPolicy(ExtractionZone &ExtZone, const SourceManager &SM,
   return SemicolonPolicy;
 }
 
+// Returns true if the selected code is an expression, false otherwise.
+bool isExpression(const ExtractionZone &ExtZone) {
+  const auto &Node{*ExtZone.Parent};
+  return Node.Children.size() == 1 and
+         ExtZone.getLastRootStmt()->ASTNode.get<Expr>() != nullptr;
+}
+
 // Generate return type for ExtractedFunc. Return false if unable to do so.
-bool generateReturnProperties(NewFunction &ExtractedFunc,
-                              const FunctionDecl &EnclosingFunc,
-                              const CapturedZoneInfo &CapturedInfo) {
+std::optional<QualType>
+generateReturnProperties(const ExtractionZone &ExtZone,
+                         const CapturedZoneInfo &CapturedInfo) {
   // If the selected code always returns, we preserve those return statements.
   // The return type should be the same as the enclosing function.
   // (Others are possible if there are conversions, but this seems clearest).
+  const auto &EnclosingFunc{*ExtZone.EnclosingFunction};
   if (CapturedInfo.HasReturnStmt) {
     // If the return is conditional, neither replacing the code with
     // `extracted()` nor `return extracted()` is correct.
     if (!CapturedInfo.AlwaysReturns)
-      return false;
+      return std::nullopt;
     QualType Ret = EnclosingFunc.getReturnType();
-    // Once we support members, it'd be nice to support e.g. extracting a method
-    // of Foo<T> that returns T. But it's not clear when that's safe.
+    // Once we support members, it'd be nice to support e.g. extracting a
+    // method of Foo<T> that returns T. But it's not clear when that's safe.
     if (Ret->isDependentType())
-      return false;
-    ExtractedFunc.ReturnType = Ret;
-    return true;
+      return std::nullopt;
+    return Ret;
+  }
+  // If the selected code is an expression, then take the return type of it.
+  if (const auto &Node{*ExtZone.Parent}; Node.Children.size() == 1) {
+    if (const Expr * Expression{ExtZone.getLastRootStmt()->ASTNode.get<Expr>()};
+        Expression) {
+      if (const auto *Call{llvm::dyn_cast_or_null<CallExpr>(Expression)};
+          Call) {
+        const auto &ASTCont{ExtZone.EnclosingFunction->getParentASTContext()};
+        return Call->getCallReturnType(ASTCont);
+      }
+      return Expression->getType();
+    }
   }
   // FIXME: Generate new return statement if needed.
-  ExtractedFunc.ReturnType = EnclosingFunc.getParentASTContext().VoidTy;
-  return true;
+  return EnclosingFunc.getParentASTContext().VoidTy;
 }
 
 void captureMethodInfo(NewFunction &ExtractedFunc,
@@ -791,14 +1102,25 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
     ExtractedFunc.ForwardDeclarationSyntacticDC = ExtractedFunc.SemanticDC;
   }
 
-  ExtractedFunc.BodyRange = ExtZone.ZoneRange;
-  ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
+  auto &ASTCont{ExtZone.EnclosingFunction->getASTContext()};
+  ExtractedFunc.Expression = isExpression(ExtZone);
+  std::optional<ExtractedBinarySubexpressionSelection> MaybeExtractedSubexpr;
+  if (ExtZone.MaybeBinarySubexpr) {
+    MaybeExtractedSubexpr = ExtZone.MaybeBinarySubexpr->tryExtract();
+    ExtractedFunc.BodyRange = MaybeExtractedSubexpr->getRange(LangOpts);
+  } else {
+    ExtractedFunc.BodyRange = ExtZone.ZoneRange;
+  }
 
+  ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
-  if (!createParameters(ExtractedFunc, CapturedInfo) ||
-      !generateReturnProperties(ExtractedFunc, *ExtZone.EnclosingFunction,
-                                CapturedInfo))
+
+  auto MaybeRetType{generateReturnProperties(ExtZone, CapturedInfo)};
+  auto MaybeParams{createParams(MaybeExtractedSubexpr, CapturedInfo, ASTCont)};
+  if (not MaybeRetType || not MaybeParams)
     return error("Too complex to extract.");
+  ExtractedFunc.ReturnType = std::move(*MaybeRetType);
+  ExtractedFunc.Parameters = std::move(*MaybeParams);
   return ExtractedFunc;
 }
 
@@ -913,8 +1235,8 @@ Expected<Tweak::Effect> ExtractFunction::apply(const Selection &Inputs) {
 
       tooling::Replacements OtherEdit(
           createForwardDeclaration(*ExtractedFunc, SM));
-      if (auto PathAndEdit = Tweak::Effect::fileEdit(SM, SM.getFileID(*FwdLoc),
-                                                 OtherEdit))
+      if (auto PathAndEdit =
+              Tweak::Effect::fileEdit(SM, SM.getFileID(*FwdLoc), OtherEdit))
         MultiFileEffect->ApplyEdits.try_emplace(PathAndEdit->first,
                                                 PathAndEdit->second);
       else
