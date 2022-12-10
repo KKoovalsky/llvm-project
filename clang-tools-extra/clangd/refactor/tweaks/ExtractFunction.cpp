@@ -292,20 +292,12 @@ computeEnclosingFuncRange(const FunctionDecl *EnclosingFunction,
   return toHalfOpenFileRange(SM, LangOpts, EnclosingFunction->getSourceRange());
 }
 
-// returns true if Child can be a single RootStmt being extracted from
-// EnclosingFunc.
-bool validSingleChild(const Node *Child, const FunctionDecl *EnclosingFunc) {
-  // Don't extract expressions.
-  // FIXME: We should extract expressions that are "statements" i.e. not
-  // subexpressions
-  if (Child->ASTNode.get<Expr>())
-    return false;
-  // Extracting the body of EnclosingFunc would remove it's definition.
+bool isEntireFunctionBodySelected(const ExtractionZone &ExtZone) {
   assert(EnclosingFunc->hasBody() &&
          "We should always be extracting from a function body.");
-  if (Child->ASTNode.get<Stmt>() == EnclosingFunc->getBody())
-    return false;
-  return true;
+  return ExtZone.Parent->Children.size() == 1 &&
+         ExtZone.getLastRootStmt()->ASTNode.get<Stmt>() ==
+             ExtZone.EnclosingFunction->getBody();
 }
 
 // FIXME: Check we're not extracting from the initializer/condition of a control
@@ -320,10 +312,8 @@ llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
   ExtZone.EnclosingFunction = findEnclosingFunction(ExtZone.Parent);
   if (!ExtZone.EnclosingFunction)
     return std::nullopt;
-  // When there is a single RootStmt, we must check if it's valid for
-  // extraction.
-  if (ExtZone.Parent->Children.size() == 1 &&
-      !validSingleChild(ExtZone.getLastRootStmt(), ExtZone.EnclosingFunction))
+  // Extracting the body of EnclosingFunc would remove it's definition.
+  if (isEntireFunctionBodySelected(ExtZone))
     return std::nullopt;
   if (auto FuncRange =
           computeEnclosingFuncRange(ExtZone.EnclosingFunction, SM, LangOpts))
