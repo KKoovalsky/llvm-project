@@ -715,11 +715,12 @@ getSemicolonPolicy(ExtractionZone &ExtZone, const SourceManager &SM,
 
 // Generate return type for ExtractedFunc. Return false if unable to do so.
 bool generateReturnProperties(NewFunction &ExtractedFunc,
-                              const FunctionDecl &EnclosingFunc,
+                              const ExtractionZone &ExtZone,
                               const CapturedZoneInfo &CapturedInfo) {
   // If the selected code always returns, we preserve those return statements.
   // The return type should be the same as the enclosing function.
   // (Others are possible if there are conversions, but this seems clearest).
+  const auto &EnclosingFunc{*ExtZone.EnclosingFunction};
   if (CapturedInfo.HasReturnStmt) {
     // If the return is conditional, neither replacing the code with
     // `extracted()` nor `return extracted()` is correct.
@@ -732,6 +733,14 @@ bool generateReturnProperties(NewFunction &ExtractedFunc,
       return false;
     ExtractedFunc.ReturnType = Ret;
     return true;
+  }
+  // If the selected code is an expression, then take the return type of it.
+  if (const auto &Node{*ExtZone.Parent}; Node.Children.size() == 1) {
+    if (const Expr * Expression{ExtZone.getLastRootStmt()->ASTNode.get<Expr>()};
+        Expression) {
+      ExtractedFunc.ReturnType = Expression->getType();
+      return true;
+    }
   }
   // FIXME: Generate new return statement if needed.
   ExtractedFunc.ReturnType = EnclosingFunc.getParentASTContext().VoidTy;
@@ -786,8 +795,7 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
 
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
   if (!createParameters(ExtractedFunc, CapturedInfo) ||
-      !generateReturnProperties(ExtractedFunc, *ExtZone.EnclosingFunction,
-                                CapturedInfo))
+      !generateReturnProperties(ExtractedFunc, ExtZone, CapturedInfo))
     return error("Too complex to extract.");
   return ExtractedFunc;
 }
