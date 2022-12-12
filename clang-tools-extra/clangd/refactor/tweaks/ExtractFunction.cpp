@@ -295,7 +295,7 @@ computeEnclosingFuncRange(const FunctionDecl *EnclosingFunction,
 }
 
 bool isEntireFunctionBodySelected(const ExtractionZone &ExtZone) {
-  assert(EnclosingFunc->hasBody() &&
+  assert(ExtZone.EnclosingFunction->hasBody() &&
          "We should always be extracting from a function body.");
   return ExtZone.Parent->Children.size() == 1 &&
          ExtZone.getLastRootStmt()->ASTNode.get<Stmt>() ==
