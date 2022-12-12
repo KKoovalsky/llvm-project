@@ -73,6 +73,8 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_os_ostream.h"
 
+#include <optional>
+
 namespace clang {
 namespace clangd {
 namespace {
@@ -714,9 +716,9 @@ getSemicolonPolicy(ExtractionZone &ExtZone, const SourceManager &SM,
 }
 
 // Generate return type for ExtractedFunc. Return false if unable to do so.
-bool generateReturnProperties(NewFunction &ExtractedFunc,
-                              const ExtractionZone &ExtZone,
-                              const CapturedZoneInfo &CapturedInfo) {
+std::optional<QualType>
+generateReturnProperties(const ExtractionZone &ExtZone,
+                         const CapturedZoneInfo &CapturedInfo) {
   // If the selected code always returns, we preserve those return statements.
   // The return type should be the same as the enclosing function.
   // (Others are possible if there are conversions, but this seems clearest).
@@ -725,26 +727,23 @@ bool generateReturnProperties(NewFunction &ExtractedFunc,
     // If the return is conditional, neither replacing the code with
     // `extracted()` nor `return extracted()` is correct.
     if (!CapturedInfo.AlwaysReturns)
-      return false;
+      return std::nullopt;
     QualType Ret = EnclosingFunc.getReturnType();
     // Once we support members, it'd be nice to support e.g. extracting a method
     // of Foo<T> that returns T. But it's not clear when that's safe.
     if (Ret->isDependentType())
-      return false;
-    ExtractedFunc.ReturnType = Ret;
-    return true;
+      return std::nullopt;
+    return Ret;
   }
   // If the selected code is an expression, then take the return type of it.
   if (const auto &Node{*ExtZone.Parent}; Node.Children.size() == 1) {
     if (const Expr * Expression{ExtZone.getLastRootStmt()->ASTNode.get<Expr>()};
         Expression) {
-      ExtractedFunc.ReturnType = Expression->getType();
-      return true;
+      return Expression->getType();
     }
   }
   // FIXME: Generate new return statement if needed.
-  ExtractedFunc.ReturnType = EnclosingFunc.getParentASTContext().VoidTy;
-  return true;
+  return EnclosingFunc.getParentASTContext().VoidTy;
 }
 
 void captureMethodInfo(NewFunction &ExtractedFunc,
@@ -794,9 +793,11 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
   ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
 
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
-  if (!createParameters(ExtractedFunc, CapturedInfo) ||
-      !generateReturnProperties(ExtractedFunc, ExtZone, CapturedInfo))
+  auto MaybeRetType{generateReturnProperties(ExtZone, CapturedInfo)};
+  auto IsParamsCreated{createParameters(ExtractedFunc, CapturedInfo)};
+  if (not MaybeRetType || not IsParamsCreated)
     return error("Too complex to extract.");
+  ExtractedFunc.ReturnType = std::move(*MaybeRetType);
   return ExtractedFunc;
 }
 
