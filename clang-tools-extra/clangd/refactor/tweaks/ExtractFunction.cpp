@@ -359,6 +359,7 @@ struct NewFunction {
   bool Static = false;
   ConstexprSpecKind Constexpr = ConstexprSpecKind::Unspecified;
   bool Const = false;
+  bool ExpressionOnly = false;
 
   // Decides whether the extracted function body and the function call need a
   // semicolon after extraction.
@@ -487,8 +488,11 @@ std::string NewFunction::getFuncBody(const SourceManager &SM) const {
   // - hoist decls
   // - add return statement
   // - Add semicolon
-  return toSourceCode(SM, BodyRange).str() +
-         (SemicolonPolicy.isNeededInExtractedFunction() ? ";" : "");
+  auto NewBody{toSourceCode(SM, BodyRange).str() +
+               (SemicolonPolicy.isNeededInExtractedFunction() ? ";" : "")};
+  if (ExpressionOnly)
+    return "return " + NewBody;
+  return NewBody;
 }
 
 std::string NewFunction::Parameter::render(const DeclContext *Context) const {
@@ -715,6 +719,13 @@ getSemicolonPolicy(ExtractionZone &ExtZone, const SourceManager &SM,
   return SemicolonPolicy;
 }
 
+// Returns true if the selected code is an expression, false otherwise.
+bool isExpression(const ExtractionZone &ExtZone) {
+  const auto &Node{*ExtZone.Parent};
+  return Node.Children.size() == 1 and
+         ExtZone.getLastRootStmt()->ASTNode.get<Expr>() != nullptr;
+}
+
 // Generate return type for ExtractedFunc. Return false if unable to do so.
 std::optional<QualType>
 generateReturnProperties(const ExtractionZone &ExtZone,
@@ -791,8 +802,9 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
 
   ExtractedFunc.BodyRange = ExtZone.ZoneRange;
   ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
-
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
+  ExtractedFunc.ExpressionOnly = isExpression(ExtZone);
+
   auto MaybeRetType{generateReturnProperties(ExtZone, CapturedInfo)};
   auto IsParamsCreated{createParameters(ExtractedFunc, CapturedInfo)};
   if (not MaybeRetType || not IsParamsCreated)

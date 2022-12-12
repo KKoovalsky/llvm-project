@@ -580,20 +580,23 @@ int getNum(bool Superstitious, int Min, int Max) {
 }
 
 TEST_F(ExtractFunctionTest, Expressions) {
-  Context = Function;
 
   {
     const char *Before{R"cpp(
-double a{2.0}, b{3.2}, c{31.55};
-double v{[[b * b - 4 * a * c]]};
+void wrapperFun() {
+  double a{2.0}, b{3.2}, c{31.55};
+  double v{[[b * b - 4 * a * c]]};
+}
       )cpp"};
 
     const char *After{R"cpp(
-double extracted(double &a, double &b, double& c) {
+double extracted(double &a, double &b, double &c) {
 return b * b - 4 * a * c;
 }
-double a{2.0}, b{3.2}, c{31.55};
-double v{extracted(a, b, c)};
+void wrapperFun() {
+  double a{2.0}, b{3.2}, c{31.55};
+  double v{extracted(a, b, c)};
+}
       )cpp"};
 
     EXPECT_EQ(apply(Before), After);
