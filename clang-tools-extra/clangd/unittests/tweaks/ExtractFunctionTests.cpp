@@ -581,6 +581,7 @@ int getNum(bool Superstitious, int Min, int Max) {
 
 TEST_F(ExtractFunctionTest, Expressions) {
 
+  // Basic expression returning by value
   {
     const char *Before{R"cpp(
 void wrapperFun() {
@@ -602,6 +603,93 @@ void wrapperFun() {
     EXPECT_EQ(apply(Before), After);
   }
 
+  // Pre-expression
+  {
+    const char *Before{R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{[[a + b + c]] + d};
+}
+      )cpp"};
+
+    const char *After{R"cpp(
+int extracted(int &a, int &b, int &c) {
+return a + b + c;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{extracted(a, b, c) + d};
+}
+      )cpp"};
+
+    EXPECT_EQ(apply(Before), After);
+  }
+
+  // Subexpression with three operands on the same level
+  {
+    const char *Before{R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + [[b + c + d]] + e};
+}
+      )cpp"};
+
+    const char *After{R"cpp(
+int extracted(int &b, int &c, int &d) {
+return b + c + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + extracted(b, c, d) + e};
+}
+      )cpp"};
+
+    EXPECT_EQ(apply(Before), After);
+  }
+
+  // Subexpression with four operands on the same level
+  {
+    const char *Before{R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + [[a + b + c + d]] + c};
+}
+      )cpp"};
+
+    const char *After{R"cpp(
+int extracted(int &a, int &b, int &c, int &d) {
+return a + b + c + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + extracted(a, b, c, d) + c};
+}
+      )cpp"};
+
+    EXPECT_EQ(apply(Before), After);
+  }
+
+  // Subexpression with three operands on the same level, deeply nested
+  {
+    const char *Before{R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + b + [[c + c + d]] + c};
+}
+      )cpp"};
+
+    const char *After{R"cpp(
+int extracted(int &c, int &d) {
+return c + c + d;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{311};
+  auto v{a + extracted(c, d) + c};
+}
+      )cpp"};
+
+    EXPECT_EQ(apply(Before), After);
+  }
 }
 
 } // namespace

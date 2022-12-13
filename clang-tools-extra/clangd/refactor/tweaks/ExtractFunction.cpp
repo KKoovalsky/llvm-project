@@ -47,6 +47,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AST.h"
+#include "BinarySubexpression.h"
 #include "FindTarget.h"
 #include "ParsedAST.h"
 #include "Selection.h"
@@ -154,6 +155,7 @@ const Node *getParentOfRootStmts(const Node *CommonAnc) {
 
 // The ExtractionZone class forms a view of the code wrt Zone.
 struct ExtractionZone {
+  const Node *CommonAncestor;
   // Parent of RootStatements being extracted.
   const Node *Parent = nullptr;
   // The half-open file range of the code being extracted.
@@ -308,6 +310,7 @@ llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
                                                   const SourceManager &SM,
                                                   const LangOptions &LangOpts) {
   ExtractionZone ExtZone;
+  ExtZone.CommonAncestor = CommonAnc;
   ExtZone.Parent = getParentOfRootStmts(CommonAnc);
   if (!ExtZone.Parent || ExtZone.Parent->Children.empty())
     return std::nullopt;
@@ -800,10 +803,19 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
     ExtractedFunc.ForwardDeclarationSyntacticDC = ExtractedFunc.SemanticDC;
   }
 
-  ExtractedFunc.BodyRange = ExtZone.ZoneRange;
+  ExtractedFunc.ExpressionOnly = isExpression(ExtZone);
+  SourceRange MaybeBinarySubexpr;
+  if (ExtractedFunc.ExpressionOnly) {
+    MaybeBinarySubexpr =
+        getBinaryOperatorRange(*ExtZone.CommonAncestor, SM, LangOpts);
+    vlog("Is Binary Subexpr: {0}", MaybeBinarySubexpr.isValid());
+  }
+  if (MaybeBinarySubexpr.isValid())
+    ExtractedFunc.BodyRange = std::move(MaybeBinarySubexpr);
+  else
+    ExtractedFunc.BodyRange = ExtZone.ZoneRange;
   ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
-  ExtractedFunc.ExpressionOnly = isExpression(ExtZone);
 
   auto MaybeRetType{generateReturnProperties(ExtZone, CapturedInfo)};
   auto IsParamsCreated{createParameters(ExtractedFunc, CapturedInfo)};
