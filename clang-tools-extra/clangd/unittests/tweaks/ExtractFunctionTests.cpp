@@ -690,6 +690,7 @@ void wrapperFun() {
 
     EXPECT_EQ(apply(Before), After);
   }
+  // Large subexpression, with multiple operands on the same level.
 }
 
 } // namespace
