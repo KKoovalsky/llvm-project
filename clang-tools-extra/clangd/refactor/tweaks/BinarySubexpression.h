@@ -265,25 +265,18 @@ struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
       Op->ASTNode.dump(Os, Cont);
   }
 
-  llvm::SmallVector<const Decl *> collectReferences(ASTContext &Cont) const {
-    // We use the the Set here, to avoid duplicates, but since the Set will not
-    // care about the order, we need to use a vector to collect the unique
-    // references in the order of referencing.
-    llvm::SmallVector<const Decl *> Result;
-    llvm::DenseSet<const Decl *> UniqueReferences;
+  llvm::SmallVector<const DeclRefExpr *>
+  collectReferences(ASTContext &Cont) const {
+    llvm::SmallVector<const DeclRefExpr *> Refs;
     auto Matcher{
         ast_matchers::findAll(ast_matchers::declRefExpr().bind("ref"))};
     for (const auto *SelNode : Operands.Operands) {
       auto Matches{ast_matchers::match(Matcher, SelNode->ASTNode, Cont)};
       for (const auto &Match : Matches)
-        if (const DeclRefExpr * Ref{Match.getNodeAs<DeclRefExpr>("ref")}; Ref) {
-          const Decl *D{Ref->getDecl()};
-          auto [It, IsNew]{UniqueReferences.insert(D)};
-          if (IsNew)
-            Result.push_back(D);
-        }
+        if (const DeclRefExpr * Ref{Match.getNodeAs<DeclRefExpr>("ref")}; Ref)
+          Refs.push_back(Ref);
     }
-    return Result;
+    return Refs;
   }
 
 private:
