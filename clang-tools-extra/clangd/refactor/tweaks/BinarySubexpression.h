@@ -10,8 +10,12 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/OperationKinds.h"
+#include "clang/ASTMatchers/ASTMatchFinder.h"
+#include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <optional>
@@ -259,6 +263,27 @@ struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
                             const ASTContext &Cont) const {
     for (const auto *Op : Operands.Operands)
       Op->ASTNode.dump(Os, Cont);
+  }
+
+  llvm::SmallVector<const Decl *> collectReferences(ASTContext &Cont) const {
+    // We use the the Set here, to avoid duplicates, but since the Set will not
+    // care about the order, we need to use a vector to collect the unique
+    // references in the order of referencing.
+    llvm::SmallVector<const Decl *> Result;
+    llvm::DenseSet<const Decl *> UniqueReferences;
+    auto Matcher{
+        ast_matchers::findAll(ast_matchers::declRefExpr().bind("ref"))};
+    for (const auto *SelNode : Operands.Operands) {
+      auto Matches{ast_matchers::match(Matcher, SelNode->ASTNode, Cont)};
+      for (const auto &Match : Matches)
+        if (const DeclRefExpr * Ref{Match.getNodeAs<DeclRefExpr>("ref")}; Ref) {
+          const Decl *D{Ref->getDecl()};
+          auto [It, IsNew]{UniqueReferences.insert(D)};
+          if (IsNew)
+            Result.push_back(D);
+        }
+    }
+    return Result;
   }
 
 private:
