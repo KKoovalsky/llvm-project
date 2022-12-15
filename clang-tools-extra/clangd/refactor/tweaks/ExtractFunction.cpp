@@ -376,7 +376,7 @@ struct NewFunction {
   bool Static = false;
   ConstexprSpecKind Constexpr = ConstexprSpecKind::Unspecified;
   bool Const = false;
-  bool ExpressionOnly = false;
+  bool Expression = false;
 
   // Decides whether the extracted function body and the function call need a
   // semicolon after extraction.
@@ -507,7 +507,7 @@ std::string NewFunction::getFuncBody(const SourceManager &SM) const {
   // - Add semicolon
   auto NewBody{toSourceCode(SM, BodyRange).str() +
                (SemicolonPolicy.isNeededInExtractedFunction() ? ";" : "")};
-  if (ExpressionOnly)
+  if (Expression)
     return "return " + NewBody;
   return NewBody;
 }
@@ -817,7 +817,7 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
     ExtractedFunc.ForwardDeclarationSyntacticDC = ExtractedFunc.SemanticDC;
   }
 
-  ExtractedFunc.ExpressionOnly = isExpression(ExtZone);
+  ExtractedFunc.Expression = isExpression(ExtZone);
   SourceRange MaybeBinarySubexpr;
   if (ExtractedFunc.ExpressionOnly) {
     MaybeBinarySubexpr =
