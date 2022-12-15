@@ -121,11 +121,11 @@ private:
     const SelectionTree::Node *BinOpSelectionIt{Start->Parent};
     // Edge case: the selection starts from the most-left LHS, e.g. [[a+b+c]]+d
     if (BinOpSelectionIt->Children.size() == 2)
-      Operands.emplace_back(BinOpSelectionIt->Children.front());
+      Operands.emplace_back(BinOpSelectionIt->Children.front()); // LHS
     // Go up the Binary Operation three, up to the most-right RHS
     for (; BinOpSelectionIt->Children.back() != End;
          BinOpSelectionIt = BinOpSelectionIt->Parent)
-      Operands.emplace_back(BinOpSelectionIt->Children.front());
+      Operands.emplace_back(BinOpSelectionIt->Children.back()); // RHS
     // Remember to add the most-right RHS
     Operands.emplace_back(End);
 
@@ -172,8 +172,8 @@ protected:
   const SourceManager &SM;
   BinaryOperatorKind Kind;
   SourceLocation ExprLoc;
-  // May also contain partially selected operations, e.g. a + [[b + c]], will
-  // keep (a + b) BinaryOperator.
+  // May also contain partially selected operations,
+  // e.g. a + [[b + c]], will keep (a + b) BinaryOperator.
   llvm::SmallVector<const SelectionTree::Node *> SelectedOperations;
 };
 
