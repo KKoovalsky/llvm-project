@@ -36,11 +36,13 @@ namespace clang::clangd {
 // Information extracted about a binary operator encounted in a SelectionTree.
 // It can represent either an overloaded or built-in operator.
 
+struct ExtractedBinarySubexpressionSelection;
+
 class BinarySubexpressionSelection {
 
 public:
   static inline std::optional<BinarySubexpressionSelection>
-  parse(const SelectionTree::Node &N, const SourceManager &SM) {
+  tryParse(const SelectionTree::Node &N, const SourceManager &SM) {
     if (const BinaryOperator *Op =
             llvm::dyn_cast_or_null<BinaryOperator>(N.ASTNode.get<Expr>())) {
       return BinarySubexpressionSelection{SM, Op->getOpcode(), Op->getExprLoc(),
@@ -83,7 +85,7 @@ public:
     }
   }
 
-  bool crossesMacroBoundary(const SourceManager &SM) const {
+  bool crossesMacroBoundary() const {
     FileID F = SM.getFileID(ExprLoc);
     for (const SelectionTree::Node *Child : SelectedOperations)
       if (SM.getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
@@ -91,27 +93,18 @@ public:
     return false;
   }
 
-  bool isExtractable(const SourceManager &SM) const {
-    return associative() and not crossesMacroBoundary(SM);
+  bool isExtractable() const {
+    return associative() and not crossesMacroBoundary();
   }
 
-  SourceRange getRange(const LangOptions &LangOpts) {
-    updateSelectedOperands();
-    return SourceRange(
-        toHalfOpenFileRange(
-            SM, LangOpts,
-            CachedSelectedOperands->Start->ASTNode.getSourceRange())
-            ->getBegin(),
-        toHalfOpenFileRange(
-            SM, LangOpts, CachedSelectedOperands->End->ASTNode.getSourceRange())
-            ->getEnd());
-  }
+  std::optional<ExtractedBinarySubexpressionSelection> tryExtract() const;
 
-  void dumpSelectedOperands(llvm::raw_ostream &Os, const ASTContext &Cont) {
-    updateSelectedOperands();
-    for (const auto *Op : CachedSelectedOperands->Operands)
-      Op->ASTNode.dump(Os, Cont);
-  }
+protected:
+  struct SelectedOperands {
+    llvm::SmallVector<const SelectionTree::Node *> Operands;
+    const SelectionTree::Node *Start;
+    const SelectionTree::Node *End;
+  };
 
 private:
   BinarySubexpressionSelection(
@@ -120,27 +113,27 @@ private:
       : SM{SM}, Kind(Kind), ExprLoc(ExprLoc),
         SelectedOperations(std::move(SelectedOperands)) {}
 
-  void updateSelectedOperands() {
-    if (CachedSelectedOperands.has_value())
-      return;
-
-    SelectedOperands Ops;
+  SelectedOperands getSelectedOperands() const {
     auto [Start, End]{getClosedRangeWithSelectedOperations()};
-    Ops.Start = Start;
-    Ops.End = End;
 
-    Ops.Operands.reserve(SelectedOperations.size());
+    llvm::SmallVector<const SelectionTree::Node *> Operands;
+    Operands.reserve(SelectedOperations.size());
     const SelectionTree::Node *BinOpSelectionIt{Start->Parent};
     // Edge case: the selection starts from the most-left LHS, e.g. [[a+b+c]]+d
     if (BinOpSelectionIt->Children.size() == 2)
-      Ops.Operands.emplace_back(BinOpSelectionIt->Children.front());
+      Operands.emplace_back(BinOpSelectionIt->Children.front());
     // Go up the Binary Operation three, up to the most-right RHS
-    while (BinOpSelectionIt->Children.back() != End)
-      Ops.Operands.emplace_back(BinOpSelectionIt->Children.front());
+    for (; BinOpSelectionIt->Children.back() != End;
+         BinOpSelectionIt = BinOpSelectionIt->Parent)
+      Operands.emplace_back(BinOpSelectionIt->Children.front());
     // Remember to add the most-right RHS
-    Ops.Operands.emplace_back(End);
+    Operands.emplace_back(End);
 
-    CachedSelectedOperands = std::move(Ops);
+    SelectedOperands Ops;
+    Ops.Start = Start;
+    Ops.End = End;
+    Ops.Operands = std::move(Operands);
+    return Ops;
   }
 
   std::pair<const SelectionTree::Node *, const SelectionTree::Node *>
@@ -157,11 +150,11 @@ private:
     // left-associative). Start needs to be pushed down int the subtree to the
     // right spot.
     while (true) {
-      auto MaybeOp{parse(Start->ignoreImplicit(), SM)};
+      auto MaybeOp{tryParse(Start->ignoreImplicit(), SM)};
       if (not MaybeOp)
         break;
       const auto &Op{*MaybeOp};
-      if (Op.Kind != OuterOp or Op.crossesMacroBoundary(SM))
+      if (Op.Kind != OuterOp or Op.crossesMacroBoundary())
         break;
       assert(!Op.SelectedOperations.empty() &&
              "got only operator on one side!");
@@ -175,20 +168,13 @@ private:
     return {Start, End};
   }
 
-  struct SelectedOperands {
-    llvm::SmallVector<const SelectionTree::Node *> Operands;
-    const SelectionTree::Node *Start;
-    const SelectionTree::Node *End;
-  };
-
+protected:
   const SourceManager &SM;
   BinaryOperatorKind Kind;
   SourceLocation ExprLoc;
   // May also contain partially selected operations, e.g. a + [[b + c]], will
   // keep (a + b) BinaryOperator.
   llvm::SmallVector<const SelectionTree::Node *> SelectedOperations;
-
-  std::optional<SelectedOperands> CachedSelectedOperands;
 };
 
 struct ParsedBinaryOperator {
@@ -252,6 +238,39 @@ struct ParsedBinaryOperator {
   }
 };
 
+struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
+  ExtractedBinarySubexpressionSelection(BinarySubexpressionSelection BinSubexpr,
+                                        SelectedOperands SelectedOps)
+      : BinarySubexpressionSelection::BinarySubexpressionSelection(
+            std::move(BinSubexpr)),
+        Operands{std::move(SelectedOps)} {}
+
+  SourceRange getRange(const LangOptions &LangOpts) const {
+    return SourceRange(
+        toHalfOpenFileRange(SM, LangOpts,
+                            Operands.Start->ASTNode.getSourceRange())
+            ->getBegin(),
+        toHalfOpenFileRange(SM, LangOpts,
+                            Operands.End->ASTNode.getSourceRange())
+            ->getEnd());
+  }
+
+  void dumpSelectedOperands(llvm::raw_ostream &Os,
+                            const ASTContext &Cont) const {
+    for (const auto *Op : Operands.Operands)
+      Op->ASTNode.dump(Os, Cont);
+  }
+
+private:
+  SelectedOperands Operands;
+};
+
+inline std::optional<ExtractedBinarySubexpressionSelection>
+BinarySubexpressionSelection::tryExtract() const {
+  if (not isExtractable())
+    return std::nullopt;
+  return ExtractedBinarySubexpressionSelection{*this, getSelectedOperands()};
+}
 // If have an associative operator at the top level, then we must find
 // the start point (rightmost in LHS) and end point (leftmost in RHS).
 // We can only descend into subtrees where the operator matches.
