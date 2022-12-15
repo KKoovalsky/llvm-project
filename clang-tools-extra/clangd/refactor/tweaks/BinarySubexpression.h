@@ -46,7 +46,7 @@ class BinarySubexpressionSelection {
 
 public:
   static inline std::optional<BinarySubexpressionSelection>
-  tryParse(const SelectionTree::Node &N, const SourceManager &SM) {
+  tryParse(const SelectionTree::Node &N, const SourceManager *SM) {
     if (const BinaryOperator *Op =
             llvm::dyn_cast_or_null<BinaryOperator>(N.ASTNode.get<Expr>())) {
       return BinarySubexpressionSelection{SM, Op->getOpcode(), Op->getExprLoc(),
@@ -90,9 +90,9 @@ public:
   }
 
   bool crossesMacroBoundary() const {
-    FileID F = SM.getFileID(ExprLoc);
+    FileID F = SM->getFileID(ExprLoc);
     for (const SelectionTree::Node *Child : SelectedOperations)
-      if (SM.getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
+      if (SM->getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
         return true;
     return false;
   }
@@ -112,7 +112,7 @@ protected:
 
 private:
   BinarySubexpressionSelection(
-      const SourceManager &SM, BinaryOperatorKind Kind, SourceLocation ExprLoc,
+      const SourceManager *SM, BinaryOperatorKind Kind, SourceLocation ExprLoc,
       llvm::SmallVector<const SelectionTree::Node *> SelectedOperands)
       : SM{SM}, Kind(Kind), ExprLoc(ExprLoc),
         SelectedOperations(std::move(SelectedOperands)) {}
@@ -173,7 +173,7 @@ private:
   }
 
 protected:
-  const SourceManager &SM;
+  const SourceManager *SM;
   BinaryOperatorKind Kind;
   SourceLocation ExprLoc;
   // May also contain partially selected operations,
@@ -251,10 +251,10 @@ struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
 
   SourceRange getRange(const LangOptions &LangOpts) const {
     return SourceRange(
-        toHalfOpenFileRange(SM, LangOpts,
+        toHalfOpenFileRange(*SM, LangOpts,
                             Operands.Start->ASTNode.getSourceRange())
             ->getBegin(),
-        toHalfOpenFileRange(SM, LangOpts,
+        toHalfOpenFileRange(*SM, LangOpts,
                             Operands.End->ASTNode.getSourceRange())
             ->getEnd());
   }
