@@ -10,7 +10,11 @@
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/OperationKinds.h"
+#include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <optional>
 
 namespace clang::clangd {
 
@@ -31,6 +35,161 @@ namespace clang::clangd {
 //    the computeReferencedDecls() calls around the binary operator tree.
 // Information extracted about a binary operator encounted in a SelectionTree.
 // It can represent either an overloaded or built-in operator.
+
+class BinarySubexpressionSelection {
+
+public:
+  static inline std::optional<BinarySubexpressionSelection>
+  parse(const SelectionTree::Node &N, const SourceManager &SM) {
+    if (const BinaryOperator *Op =
+            llvm::dyn_cast_or_null<BinaryOperator>(N.ASTNode.get<Expr>())) {
+      return BinarySubexpressionSelection{SM, Op->getOpcode(), Op->getExprLoc(),
+                                          N.Children};
+    }
+    if (const CXXOperatorCallExpr *Op =
+            llvm::dyn_cast_or_null<CXXOperatorCallExpr>(
+                N.ASTNode.get<Expr>())) {
+      if (!Op->isInfixBinaryOp())
+        return std::nullopt;
+
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOperands;
+      // Not all children are args, there's also the callee (operator).
+      for (const auto *Child : N.Children) {
+        const Expr *E = Child->ASTNode.get<Expr>();
+        assert(E && "callee and args should be Exprs!");
+        if (E == Op->getArg(0) || E == Op->getArg(1))
+          SelectedOperands.push_back(Child);
+      }
+      return BinarySubexpressionSelection{
+          SM, BinaryOperator::getOverloadedOpcode(Op->getOperator()),
+          Op->getExprLoc(), std::move(SelectedOperands)};
+    }
+    return std::nullopt;
+  }
+
+  bool associative() const {
+    // Must also be left-associative, or update getBinaryOperatorRange()!
+    switch (Kind) {
+    case BO_Add:
+    case BO_Mul:
+    case BO_And:
+    case BO_Or:
+    case BO_Xor:
+    case BO_LAnd:
+    case BO_LOr:
+      return true;
+    default:
+      return false;
+    }
+  }
+
+  bool crossesMacroBoundary(const SourceManager &SM) const {
+    FileID F = SM.getFileID(ExprLoc);
+    for (const SelectionTree::Node *Child : SelectedOperations)
+      if (SM.getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
+        return true;
+    return false;
+  }
+
+  bool isExtractable(const SourceManager &SM) const {
+    return associative() and not crossesMacroBoundary(SM);
+  }
+
+  SourceRange getRange(const LangOptions &LangOpts) {
+    updateSelectedOperands();
+    return SourceRange(
+        toHalfOpenFileRange(
+            SM, LangOpts,
+            CachedSelectedOperands->Start->ASTNode.getSourceRange())
+            ->getBegin(),
+        toHalfOpenFileRange(
+            SM, LangOpts, CachedSelectedOperands->End->ASTNode.getSourceRange())
+            ->getEnd());
+  }
+
+  void dumpSelectedOperands(llvm::raw_ostream &Os, const ASTContext &Cont) {
+    updateSelectedOperands();
+    for (const auto *Op : CachedSelectedOperands->Operands)
+      Op->ASTNode.dump(Os, Cont);
+  }
+
+private:
+  BinarySubexpressionSelection(
+      const SourceManager &SM, BinaryOperatorKind Kind, SourceLocation ExprLoc,
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOperands)
+      : SM{SM}, Kind(Kind), ExprLoc(ExprLoc),
+        SelectedOperations(std::move(SelectedOperands)) {}
+
+  void updateSelectedOperands() {
+    if (CachedSelectedOperands.has_value())
+      return;
+
+    SelectedOperands Ops;
+    auto [Start, End]{getClosedRangeWithSelectedOperations()};
+    Ops.Start = Start;
+    Ops.End = End;
+
+    Ops.Operands.reserve(SelectedOperations.size());
+    const SelectionTree::Node *BinOpSelectionIt{Start->Parent};
+    // Edge case: the selection starts from the most-left LHS, e.g. [[a+b+c]]+d
+    if (BinOpSelectionIt->Children.size() == 2)
+      Ops.Operands.emplace_back(BinOpSelectionIt->Children.front());
+    // Go up the Binary Operation three, up to the most-right RHS
+    while (BinOpSelectionIt->Children.back() != End)
+      Ops.Operands.emplace_back(BinOpSelectionIt->Children.front());
+    // Remember to add the most-right RHS
+    Ops.Operands.emplace_back(End);
+
+    CachedSelectedOperands = std::move(Ops);
+  }
+
+  std::pair<const SelectionTree::Node *, const SelectionTree::Node *>
+  getClosedRangeWithSelectedOperations() const {
+    BinaryOperatorKind OuterOp = Kind;
+    // Because the tree we're interested in contains only one operator type, and
+    // all eligible operators are left-associative, the shape of the tree is
+    // very restricted: it's a linked list along the left edges.
+    // This simplifies our implementation.
+    const SelectionTree::Node *Start = SelectedOperations.front(); // LHS
+    const SelectionTree::Node *End = SelectedOperations.back();    // RHS
+
+    // End is already correct: it can't be an OuterOp (as it's
+    // left-associative). Start needs to be pushed down int the subtree to the
+    // right spot.
+    while (true) {
+      auto MaybeOp{parse(Start->ignoreImplicit(), SM)};
+      if (not MaybeOp)
+        break;
+      const auto &Op{*MaybeOp};
+      if (Op.Kind != OuterOp or Op.crossesMacroBoundary(SM))
+        break;
+      assert(!Op.SelectedOperations.empty() &&
+             "got only operator on one side!");
+      if (Op.SelectedOperations.size() == 1) { // Only Op.RHS selected
+        Start = Op.SelectedOperations.back();
+        break;
+      }
+      // Op.LHS is (at least partially) selected, so descend into it.
+      Start = Op.SelectedOperations.front();
+    }
+    return {Start, End};
+  }
+
+  struct SelectedOperands {
+    llvm::SmallVector<const SelectionTree::Node *> Operands;
+    const SelectionTree::Node *Start;
+    const SelectionTree::Node *End;
+  };
+
+  const SourceManager &SM;
+  BinaryOperatorKind Kind;
+  SourceLocation ExprLoc;
+  // May also contain partially selected operations, e.g. a + [[b + c]], will
+  // keep (a + b) BinaryOperator.
+  llvm::SmallVector<const SelectionTree::Node *> SelectedOperations;
+
+  std::optional<SelectedOperands> CachedSelectedOperands;
+};
 
 struct ParsedBinaryOperator {
   BinaryOperatorKind Kind;
@@ -121,8 +280,9 @@ inline const SourceRange getBinaryOperatorRange(const SelectionTree::Node &N,
   // This simplifies our implementation.
   const SelectionTree::Node *Start = Op.SelectedOperands.front(); // LHS
   const SelectionTree::Node *End = Op.SelectedOperands.back();    // RHS
-  // End is already correct: it can't be an OuterOp (as it's left-associative).
-  // Start needs to be pushed down int the subtree to the right spot.
+  // End is already correct: it can't be an OuterOp (as it's
+  // left-associative). Start needs to be pushed down int the subtree to the
+  // right spot.
   while (Op.parse(Start->ignoreImplicit()) && Op.Kind == OuterOp &&
          !Op.crossesMacroBoundary(SM)) {
     assert(!Op.SelectedOperands.empty() && "got only operator on one side!");
