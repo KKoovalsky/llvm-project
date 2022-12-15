@@ -166,6 +166,8 @@ struct ExtractionZone {
   SourceRange EnclosingFuncRange;
   // Set of statements that form the ExtractionZone.
   llvm::DenseSet<const Stmt *> RootStmts;
+  // If the extraction zone is a "binary subexpression", then this will be set.
+  std::optional<BinarySubexpressionSelection> MaybeBinarySubexpr;
 
   SourceLocation getInsertionPoint() const {
     return EnclosingFuncRange.getBegin();
@@ -311,6 +313,18 @@ llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
                                                   const LangOptions &LangOpts) {
   ExtractionZone ExtZone;
   ExtZone.CommonAncestor = CommonAnc;
+  auto MaybeBinarySubexpr{
+      BinarySubexpressionSelection::tryParse(CommonAnc->ignoreImplicit(), &SM)};
+  if (MaybeBinarySubexpr) {
+    // FIXME: We shall not allow the user to extract expressions which we don't
+    // support, or which are weirdly selected (e.g. a [[+ b + c]]). If the
+    // selected subexpression is an entire expression (not only a part of
+    // expression), then we don't need the BinarySubexpressionSelection.
+    if (const auto &BinarySubexpr{*MaybeBinarySubexpr};
+        BinarySubexpr.isExtractable()) {
+      ExtZone.MaybeBinarySubexpr = std::move(MaybeBinarySubexpr);
+    }
+  }
   ExtZone.Parent = getParentOfRootStmts(CommonAnc);
   if (!ExtZone.Parent || ExtZone.Parent->Children.empty())
     return std::nullopt;
