@@ -677,12 +677,29 @@ CapturedZoneInfo captureZoneInfo(const ExtractionZone &ExtZone) {
   return Result;
 }
 
-// Adds parameters to ExtractedFunc.
-// Returns true if able to find the parameters successfully and no hoisting
-// needed.
+static const ValueDecl *unpackDeclForParameter(const Decl *D) {
+  const ValueDecl *VD = dyn_cast_or_null<ValueDecl>(D);
+  // Can't parameterise if the Decl isn't a ValueDecl or is a FunctionDecl
+  // (this includes the case of recursive call to EnclosingFunc in Zone).
+  if (!VD || isa<FunctionDecl>(D))
+    return nullptr;
+  return VD;
+}
+
+static QualType getParameterTypeInfo(const ValueDecl *VD) {
+  // Parameter qualifiers are same as the Decl's qualifiers.
+  return VD->getType().getNonReferenceType();
+}
+
+using Parameters = std::vector<NewFunction::Parameter>;
+using MaybeParameters = std::optional<Parameters>;
+
 // FIXME: Check if the declaration has a local/anonymous type
-bool createParameters(NewFunction &ExtractedFunc,
-                      const CapturedZoneInfo &CapturedInfo) {
+// Returns actual parameters if able to find the parameters successfully and no
+// hoisting needed.
+static MaybeParameters
+createParamsForNonExpr(const CapturedZoneInfo &CapturedInfo) {
+  std::vector<NewFunction::Parameter> Params;
   for (const auto &KeyVal : CapturedInfo.DeclInfoMap) {
     const auto &DeclInfo = KeyVal.second;
     // If a Decl was Declared in zone and referenced in post zone, it
@@ -690,20 +707,16 @@ bool createParameters(NewFunction &ExtractedFunc,
     // FIXME: Support Decl Hoisting.
     if (DeclInfo.DeclaredIn == ZoneRelative::Inside &&
         DeclInfo.IsReferencedInPostZone)
-      return false;
+      return std::nullopt;
     if (!DeclInfo.IsReferencedInZone)
       continue; // no need to pass as parameter, not referenced
     if (DeclInfo.DeclaredIn == ZoneRelative::Inside ||
         DeclInfo.DeclaredIn == ZoneRelative::OutsideFunc)
       continue; // no need to pass as parameter, still accessible.
-    // Parameter specific checks.
-    const ValueDecl *VD = dyn_cast_or_null<ValueDecl>(DeclInfo.TheDecl);
-    // Can't parameterise if the Decl isn't a ValueDecl or is a FunctionDecl
-    // (this includes the case of recursive call to EnclosingFunc in Zone).
-    if (!VD || isa<FunctionDecl>(DeclInfo.TheDecl))
-      return false;
-    // Parameter qualifiers are same as the Decl's qualifiers.
-    QualType TypeInfo = VD->getType().getNonReferenceType();
+    const auto *VD{unpackDeclForParameter(DeclInfo.TheDecl)};
+    if (VD == nullptr)
+      return std::nullopt;
+    QualType TypeInfo{getParameterTypeInfo(VD)};
     // FIXME: Need better qualifier checks: check mutated status for
     // Decl(e.g. was it assigned, passed as nonconst argument, etc)
     // FIXME: check if parameter will be a non l-value reference.
@@ -711,12 +724,42 @@ bool createParameters(NewFunction &ExtractedFunc,
     // pointers, etc by reference.
     bool IsPassedByReference = true;
     // We use the index of declaration as the ordering priority for parameters.
-    ExtractedFunc.Parameters.push_back({std::string(VD->getName()), TypeInfo,
-                                        IsPassedByReference,
-                                        DeclInfo.DeclIndex});
+    Params.push_back({std::string(VD->getName()), TypeInfo, IsPassedByReference,
+                      DeclInfo.DeclIndex});
   }
-  llvm::sort(ExtractedFunc.Parameters);
-  return true;
+  llvm::sort(Params);
+  return Params;
+}
+
+static MaybeParameters
+createParamsForExpr(const ExtractedBinarySubexpressionSelection &Subexpr,
+                    ASTContext &ASTCont) {
+  std::vector<NewFunction::Parameter> Params;
+  auto Refs{Subexpr.collectReferences(ASTCont)};
+  for (unsigned Idx{0}; Idx < Refs.size(); ++Idx) {
+    const auto *VD{unpackDeclForParameter(Refs[Idx]->getDecl())};
+    if (VD == nullptr)
+      return std::nullopt;
+    QualType TypeInfo{getParameterTypeInfo(VD)};
+    // FIXME: Need better qualifier checks: check mutated status for
+    // Decl(e.g. was it assigned, passed as nonconst argument, etc)
+    // FIXME: check if parameter will be a non l-value reference.
+    // FIXME: We don't want to always pass variables of types like int,
+    // pointers, etc by reference.
+    bool IsPassedByReference = true;
+    Params.push_back(
+        {std::string(VD->getName()), TypeInfo, IsPassedByReference, Idx});
+  }
+  return Params;
+}
+
+// Adds parameters to ExtractedFunc.
+MaybeParameters createParams(
+    const std::optional<ExtractedBinarySubexpressionSelection> &MaybeSubexpr,
+    const CapturedZoneInfo &CapturedInfo, ASTContext &ASTCont) {
+  if (MaybeSubexpr)
+    return createParamsForExpr(*MaybeSubexpr, ASTCont);
+  return createParamsForNonExpr(CapturedInfo);
 }
 
 // Clangd uses open ranges while ExtractionSemicolonPolicy (in Clang Tooling)
@@ -757,8 +800,8 @@ generateReturnProperties(const ExtractionZone &ExtZone,
     if (!CapturedInfo.AlwaysReturns)
       return std::nullopt;
     QualType Ret = EnclosingFunc.getReturnType();
-    // Once we support members, it'd be nice to support e.g. extracting a method
-    // of Foo<T> that returns T. But it's not clear when that's safe.
+    // Once we support members, it'd be nice to support e.g. extracting a
+    // method of Foo<T> that returns T. But it's not clear when that's safe.
     if (Ret->isDependentType())
       return std::nullopt;
     return Ret;
@@ -817,25 +860,25 @@ llvm::Expected<NewFunction> getExtractedFunction(ExtractionZone &ExtZone,
     ExtractedFunc.ForwardDeclarationSyntacticDC = ExtractedFunc.SemanticDC;
   }
 
+  auto &ASTCont{ExtZone.EnclosingFunction->getASTContext()};
   ExtractedFunc.Expression = isExpression(ExtZone);
-  SourceRange MaybeBinarySubexpr;
-  if (ExtractedFunc.ExpressionOnly) {
-    MaybeBinarySubexpr =
-        getBinaryOperatorRange(*ExtZone.CommonAncestor, SM, LangOpts);
-    vlog("Is Binary Subexpr: {0}", MaybeBinarySubexpr.isValid());
-  }
-  if (MaybeBinarySubexpr.isValid())
-    ExtractedFunc.BodyRange = std::move(MaybeBinarySubexpr);
-  else
+  std::optional<ExtractedBinarySubexpressionSelection> MaybeExtractedSubexpr;
+  if (ExtZone.MaybeBinarySubexpr) {
+    MaybeExtractedSubexpr = ExtZone.MaybeBinarySubexpr->tryExtract();
+    ExtractedFunc.BodyRange = MaybeExtractedSubexpr->getRange(LangOpts);
+  } else {
     ExtractedFunc.BodyRange = ExtZone.ZoneRange;
+  }
+
   ExtractedFunc.DefinitionPoint = ExtZone.getInsertionPoint();
   ExtractedFunc.CallerReturnsValue = CapturedInfo.AlwaysReturns;
 
   auto MaybeRetType{generateReturnProperties(ExtZone, CapturedInfo)};
-  auto IsParamsCreated{createParameters(ExtractedFunc, CapturedInfo)};
-  if (not MaybeRetType || not IsParamsCreated)
+  auto MaybeParams{createParams(MaybeExtractedSubexpr, CapturedInfo, ASTCont)};
+  if (not MaybeRetType || not MaybeParams)
     return error("Too complex to extract.");
   ExtractedFunc.ReturnType = std::move(*MaybeRetType);
+  ExtractedFunc.Parameters = std::move(*MaybeParams);
   return ExtractedFunc;
 }
 
