@@ -558,7 +558,6 @@ CapturedZoneInfo::createDeclInfo(const Decl *D, ZoneRelative RelativeLoc) {
 
 CapturedZoneInfo::DeclInformation *
 CapturedZoneInfo::getDeclInfoFor(const Decl *D) {
-  // If the Decl doesn't exist, we
   auto Iter = DeclInfoMap.find(D);
   if (Iter == DeclInfoMap.end())
     return nullptr;
@@ -567,7 +566,6 @@ CapturedZoneInfo::getDeclInfoFor(const Decl *D) {
 
 const CapturedZoneInfo::DeclInformation *
 CapturedZoneInfo::getDeclInfoFor(const Decl *D) const {
-  // If the Decl doesn't exist, we
   auto Iter = DeclInfoMap.find(D);
   if (Iter == DeclInfoMap.end())
     return nullptr;
