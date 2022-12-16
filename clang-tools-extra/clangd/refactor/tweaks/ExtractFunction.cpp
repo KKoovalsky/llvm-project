@@ -838,6 +838,11 @@ generateReturnProperties(const ExtractionZone &ExtZone,
   if (const auto &Node{*ExtZone.Parent}; Node.Children.size() == 1) {
     if (const Expr * Expression{ExtZone.getLastRootStmt()->ASTNode.get<Expr>()};
         Expression) {
+      if (const auto *Call{llvm::dyn_cast_or_null<CallExpr>(Expression)};
+          Call) {
+        const auto &ASTCont{ExtZone.EnclosingFunction->getParentASTContext()};
+        return Call->getCallReturnType(ASTCont);
+      }
       return Expression->getType();
     }
   }

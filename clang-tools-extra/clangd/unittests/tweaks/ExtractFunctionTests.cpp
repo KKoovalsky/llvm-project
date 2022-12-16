@@ -698,8 +698,45 @@ void wrapperFun() {
 }
       )cpp"},
       // TODO: Subexpression: infers return type of call returning by val
-      // TODO: Subexpression: infers return type of call returning by ref
-      // TODO: Subexpression: infers return type of call returning by const-ref
+      // TODO: Subexpression: infers return type of call returning by ref, LHS
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto& LS3{[[LS1.get()]] + LS2};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1) {
+return LS1.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2;
+  auto& LS3{extracted(LS1) + LS2};
+}
+      )cpp"},
+      // TODO: Subexpression: infers return type of call returning by ref, RHS
+      // Like above, but LHS operation shall return a value, and RHS an lvalue
+      // TODO: Subexpression: infers return type of call returning by
+      // const-ref
       // TODO: Weirdly selected subexpr: op selected, but no LHS
       // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
       // TODO: Weirdly selected subexpr: no most-right RHS selected
