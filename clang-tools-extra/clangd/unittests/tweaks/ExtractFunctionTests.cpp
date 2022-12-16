@@ -679,7 +679,7 @@ void wrapperFun() {
   auto v{a + b + extracted(c, d) + c};
 }
       )cpp"},
-      // TODO: Subexpression: captures no global variable
+      // Subexpression: captures no global variable
       {R"cpp(
 static int a{2};
 void wrapperFun() {
