@@ -698,7 +698,7 @@ using MaybeParameters = std::optional<Parameters>;
 // Returns actual parameters if able to find the parameters successfully and no
 // hoisting needed.
 static MaybeParameters
-createParamsForNonExpr(const CapturedZoneInfo &CapturedInfo) {
+createParamsForNoSubexpr(const CapturedZoneInfo &CapturedInfo) {
   std::vector<NewFunction::Parameter> Params;
   for (const auto &KeyVal : CapturedInfo.DeclInfoMap) {
     const auto &DeclInfo = KeyVal.second;
@@ -732,7 +732,7 @@ createParamsForNonExpr(const CapturedZoneInfo &CapturedInfo) {
 }
 
 static MaybeParameters
-createParamsForExpr(const ExtractedBinarySubexpressionSelection &Subexpr,
+createParamsForSubexpr(const ExtractedBinarySubexpressionSelection &Subexpr,
                     ASTContext &ASTCont) {
   std::vector<NewFunction::Parameter> Params;
   auto Refs{Subexpr.collectReferences(ASTCont)};
@@ -758,8 +758,8 @@ MaybeParameters createParams(
     const std::optional<ExtractedBinarySubexpressionSelection> &MaybeSubexpr,
     const CapturedZoneInfo &CapturedInfo, ASTContext &ASTCont) {
   if (MaybeSubexpr)
-    return createParamsForExpr(*MaybeSubexpr, ASTCont);
-  return createParamsForNonExpr(CapturedInfo);
+    return createParamsForSubexpr(*MaybeSubexpr, ASTCont);
+  return createParamsForNoSubexpr(CapturedInfo);
 }
 
 // Clangd uses open ranges while ExtractionSemicolonPolicy (in Clang Tooling)
