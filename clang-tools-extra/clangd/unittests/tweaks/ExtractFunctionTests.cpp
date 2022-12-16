@@ -680,6 +680,23 @@ void wrapperFun() {
 }
       )cpp"},
       // TODO: Subexpression: captures no global variable
+      {R"cpp(
+static int a{2};
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{[[a + b + c]] + d};
+}
+      )cpp",
+       R"cpp(
+static int a{2};
+int extracted(int &b, int &c) {
+return a + b + c;
+}
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{extracted(b, c) + d};
+}
+      )cpp"},
       // TODO: Subexpression: infers return type of call returning by val
       // TODO: Subexpression: infers return type of call returning by ref
       // TODO: Subexpression: infers return type of call returning by const-ref
