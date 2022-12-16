@@ -74,6 +74,7 @@
 #include "llvm/Support/Error.h"
 #include "llvm/Support/raw_os_ostream.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace clang {
@@ -733,23 +734,39 @@ createParamsForNoSubexpr(const CapturedZoneInfo &CapturedInfo) {
 
 static MaybeParameters
 createParamsForSubexpr(const ExtractedBinarySubexpressionSelection &Subexpr,
-                    ASTContext &ASTCont) {
-  std::vector<NewFunction::Parameter> Params;
-  auto Refs{Subexpr.collectReferences(ASTCont)};
-  for (unsigned Idx{0}; Idx < Refs.size(); ++Idx) {
-    const auto *VD{unpackDeclForParameter(Refs[Idx]->getDecl())};
+                       ASTContext &ASTCont) {
+  // We use the the Set here, to avoid duplicates, but since the Set will not
+  // care about the order, we need to use a vector to collect the unique
+  // references in the order of referencing.
+  llvm::SmallVector<const ValueDecl *> RefsAsDecls;
+  llvm::DenseSet<const ValueDecl *> UniqueRefsAsDecls;
+
+  for (const auto *Ref : Subexpr.collectReferences(ASTCont)) {
+    // FIXME: Check if this is actually a reference to a local variable, which
+    // must be passed as a parameter.
+    const auto *VD{unpackDeclForParameter(Ref->getDecl())};
+    // In case no unpacking was possible, bail out.
     if (VD == nullptr)
       return std::nullopt;
-    QualType TypeInfo{getParameterTypeInfo(VD)};
-    // FIXME: Need better qualifier checks: check mutated status for
-    // Decl(e.g. was it assigned, passed as nonconst argument, etc)
-    // FIXME: check if parameter will be a non l-value reference.
-    // FIXME: We don't want to always pass variables of types like int,
-    // pointers, etc by reference.
-    bool IsPassedByReference = true;
-    Params.push_back(
-        {std::string(VD->getName()), TypeInfo, IsPassedByReference, Idx});
+    auto [It, IsNew]{UniqueRefsAsDecls.insert(VD)};
+    if (IsNew)
+      RefsAsDecls.emplace_back(VD);
   }
+
+  std::vector<NewFunction::Parameter> Params;
+  std::transform(std::begin(RefsAsDecls), std::end(RefsAsDecls),
+                 std::back_inserter(Params), [](const ValueDecl *VD) {
+                   QualType TypeInfo{getParameterTypeInfo(VD)};
+                   // FIXME: Need better qualifier checks: check mutated status
+                   // for Decl(e.g. was it assigned, passed as nonconst
+                   // argument, etc)
+                   // FIXME: check if parameter will be a non l-value reference.
+                   // FIXME: We don't want to always pass variables of types
+                   // like int, pointers, etc by reference.
+                   bool IsPassedByRef = true;
+                   return NewFunction::Parameter{std::string(VD->getName()),
+                                                 TypeInfo, IsPassedByRef, 0};
+                 });
   return Params;
 }
 

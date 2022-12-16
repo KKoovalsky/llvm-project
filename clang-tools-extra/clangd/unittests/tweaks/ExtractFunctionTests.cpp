@@ -684,7 +684,7 @@ return c + c + d;
 }
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{311};
-  auto v{a + extracted(c, d) + c};
+  auto v{a + b + extracted(c, d) + c};
 }
       )cpp"};
 
