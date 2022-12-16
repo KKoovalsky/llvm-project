@@ -544,6 +544,7 @@ struct CapturedZoneInfo {
   // FIXME: Capture type information as well.
   DeclInformation *createDeclInfo(const Decl *D, ZoneRelative RelativeLoc);
   DeclInformation *getDeclInfoFor(const Decl *D);
+  const DeclInformation *getDeclInfoFor(const Decl *D) const;
 };
 
 CapturedZoneInfo::DeclInformation *
@@ -557,6 +558,15 @@ CapturedZoneInfo::createDeclInfo(const Decl *D, ZoneRelative RelativeLoc) {
 
 CapturedZoneInfo::DeclInformation *
 CapturedZoneInfo::getDeclInfoFor(const Decl *D) {
+  // If the Decl doesn't exist, we
+  auto Iter = DeclInfoMap.find(D);
+  if (Iter == DeclInfoMap.end())
+    return nullptr;
+  return &Iter->second;
+}
+
+const CapturedZoneInfo::DeclInformation *
+CapturedZoneInfo::getDeclInfoFor(const Decl *D) const {
   // If the Decl doesn't exist, we
   auto Iter = DeclInfoMap.find(D);
   if (Iter == DeclInfoMap.end())
@@ -733,7 +743,8 @@ createParamsForNoSubexpr(const CapturedZoneInfo &CapturedInfo) {
 }
 
 static MaybeParameters
-createParamsForSubexpr(const ExtractedBinarySubexpressionSelection &Subexpr,
+createParamsForSubexpr(const CapturedZoneInfo &CapturedInfo,
+                       const ExtractedBinarySubexpressionSelection &Subexpr,
                        ASTContext &ASTCont) {
   // We use the the Set here, to avoid duplicates, but since the Set will not
   // care about the order, we need to use a vector to collect the unique
@@ -742,12 +753,14 @@ createParamsForSubexpr(const ExtractedBinarySubexpressionSelection &Subexpr,
   llvm::DenseSet<const ValueDecl *> UniqueRefsAsDecls;
 
   for (const auto *Ref : Subexpr.collectReferences(ASTCont)) {
-    // FIXME: Check if this is actually a reference to a local variable, which
-    // must be passed as a parameter.
-    const auto *VD{unpackDeclForParameter(Ref->getDecl())};
+    const auto *D{Ref->getDecl()};
+    const auto *VD{unpackDeclForParameter(D)};
     // In case no unpacking was possible, bail out.
     if (VD == nullptr)
       return std::nullopt;
+    const auto *DeclInfo{CapturedInfo.getDeclInfoFor(D)};
+    if (DeclInfo == nullptr or DeclInfo->DeclaredIn != ZoneRelative::Before)
+      continue;
     auto [It, IsNew]{UniqueRefsAsDecls.insert(VD)};
     if (IsNew)
       RefsAsDecls.emplace_back(VD);
@@ -775,7 +788,7 @@ MaybeParameters createParams(
     const std::optional<ExtractedBinarySubexpressionSelection> &MaybeSubexpr,
     const CapturedZoneInfo &CapturedInfo, ASTContext &ASTCont) {
   if (MaybeSubexpr)
-    return createParamsForSubexpr(*MaybeSubexpr, ASTCont);
+    return createParamsForSubexpr(CapturedInfo, *MaybeSubexpr, ASTCont);
   return createParamsForNoSubexpr(CapturedInfo);
 }
 
