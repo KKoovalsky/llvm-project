@@ -581,16 +581,22 @@ int getNum(bool Superstitious, int Min, int Max) {
 
 TEST_F(ExtractFunctionTest, Expressions) {
 
-  // Basic expression returning by value
-  {
-    const char *Before{R"cpp(
+  // TODO: unavailable cases
+  // TODO: Full binary expression with macro
+  // TODO: Partially selected expression with macro, selection left-aligned
+  // TODO: Partially selected expression with macro, selection right-aligned
+  // TODO: Partially selected expression with macro, selection in the middle
+
+  std::vector<std::pair<std::string, std::string>> InputOutputs{
+      // FULL BINARY EXPRESSIONS
+      // Full binary expression, basic maths
+      {R"cpp(
 void wrapperFun() {
   double a{2.0}, b{3.2}, c{31.55};
   double v{[[b * b - 4 * a * c]]};
 }
-      )cpp"};
-
-    const char *After{R"cpp(
+      )cpp",
+       R"cpp(
 double extracted(double &a, double &b, double &c) {
 return b * b - 4 * a * c;
 }
@@ -598,21 +604,24 @@ void wrapperFun() {
   double a{2.0}, b{3.2}, c{31.55};
   double v{extracted(a, b, c)};
 }
-      )cpp"};
-
-    EXPECT_EQ(apply(Before), After);
-  }
-
-  // Pre-expression
-  {
-    const char *Before{R"cpp(
+      )cpp"},
+      // TODO: Full binary expression composed of '+' operator overloads ops
+      // TODO: Full binary expression where both operands are function calls
+      // TODO: Full binary expression, non-associative operator
+      // TODO: Full binary expression, right-associative operator
+      // TODO: Expression: captures no global variable
+      // TODO: Full expr: infers return type of call returning by val
+      // TODO: Full expr: infers return type of call returning by ref
+      // TODO: Full expr: infers return type of call returning by const-ref
+      // SUBEXPRESSIONS
+      // Left-aligned subexpression
+      {R"cpp(
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{13};
   auto v{[[a + b + c]] + d};
 }
-      )cpp"};
-
-    const char *After{R"cpp(
+      )cpp",
+       R"cpp(
 int extracted(int &a, int &b, int &c) {
 return a + b + c;
 }
@@ -620,21 +629,15 @@ void wrapperFun() {
   int a{2}, b{3}, c{31}, d{13};
   auto v{extracted(a, b, c) + d};
 }
-      )cpp"};
-
-    EXPECT_EQ(apply(Before), After);
-  }
-
-  // Subexpression with three operands on the same level
-  {
-    const char *Before{R"cpp(
+      )cpp"},
+      // Subexpression from the middle
+      {R"cpp(
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{15}, e{300};
   auto v{a + [[b + c + d]] + e};
 }
-      )cpp"};
-
-    const char *After{R"cpp(
+      )cpp",
+       R"cpp(
 int extracted(int &b, int &c, int &d) {
 return b + c + d;
 }
@@ -642,21 +645,16 @@ void wrapperFun() {
   int a{2}, b{3}, c{31}, d{15}, e{300};
   auto v{a + extracted(b, c, d) + e};
 }
-      )cpp"};
-
-    EXPECT_EQ(apply(Before), After);
-  }
-
-  // Subexpression with four operands on the same level
-  {
-    const char *Before{R"cpp(
+      )cpp"},
+      // TODO: Right-aligned subexpression
+      // Larger subexpression from the middle
+      {R"cpp(
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{311};
   auto v{a + [[a + b + c + d]] + c};
 }
-      )cpp"};
-
-    const char *After{R"cpp(
+      )cpp",
+       R"cpp(
 int extracted(int &a, int &b, int &c, int &d) {
 return a + b + c + d;
 }
@@ -664,33 +662,40 @@ void wrapperFun() {
   int a{2}, b{3}, c{31}, d{311};
   auto v{a + extracted(a, b, c, d) + c};
 }
-      )cpp"};
-
-    EXPECT_EQ(apply(Before), After);
-  }
-
-  // Subexpression with three operands on the same level, deeply nested
-  {
-    const char *Before{R"cpp(
+      )cpp"},
+      // Subexpression with duplicated references
+      {R"cpp(
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{311};
-  auto v{a + b + [[c + c + d]] + c};
+  auto v{a + b + [[c + c + c + d + d]] + c};
 }
-      )cpp"};
-
-    const char *After{R"cpp(
+      )cpp",
+       R"cpp(
 int extracted(int &c, int &d) {
-return c + c + d;
+return c + c + c + d + d;
 }
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{311};
   auto v{a + b + extracted(c, d) + c};
 }
-      )cpp"};
+      )cpp"},
+      // TODO: Subexpression: captures no global variable
+      // TODO: Subexpression: infers return type of call returning by val
+      // TODO: Subexpression: infers return type of call returning by ref
+      // TODO: Subexpression: infers return type of call returning by const-ref
+      // TODO: Weirdly selected subexpr: op selected, but no LHS
+      // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
+      // TODO: Weirdly selected subexpr: no most-right RHS selected
+  };
 
-    EXPECT_EQ(apply(Before), After);
+  for (const auto &[Input, Output] : InputOutputs) {
+    EXPECT_EQ(Output, apply(Input)) << Input;
   }
-  // Large subexpression, with multiple operands on the same level.
+}
+
+TEST_F(ExtractFunctionTest, ExpressionsInMethods) {
+  // TODO: unavailable
+  // TODO: available
 }
 
 } // namespace
