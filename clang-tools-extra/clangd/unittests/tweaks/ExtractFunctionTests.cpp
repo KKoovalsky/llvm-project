@@ -581,7 +581,7 @@ int getNum(bool Superstitious, int Min, int Max) {
 
 TEST_F(ExtractFunctionTest, Expressions) {
 
-  // TODO: unavailable cases
+  // TODO: UNAVAILABLE CASES:
   // TODO: Full binary expression with macro
   // TODO: Partially selected expression with macro, selection left-aligned
   // TODO: Partially selected expression with macro, selection right-aligned
@@ -646,7 +646,22 @@ void wrapperFun() {
   auto v{a + extracted(b, c, d) + e};
 }
       )cpp"},
-      // TODO: Right-aligned subexpression
+      // Right-aligned subexpression
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + b + [[c + d + e]]};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &c, int &d, int &e) {
+return c + d + e;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{15}, e{300};
+  auto v{a + b + extracted(c, d, e)};
+}
+      )cpp"},
       // Larger subexpression from the middle
       {R"cpp(
 void wrapperFun() {
@@ -843,6 +858,46 @@ void wrapperFun() {
   auto LS3{LS1 + extracted(LS2)};
 }
       )cpp"},
+      // Subexpression on operator overload, left-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{[[LS1 + LS2.get()]] + LS3.get() + LS4};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1, LargeStruct &LS2) {
+return LS1 + LS2.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{extracted(LS1, LS2) + LS3.get() + LS4};
+}
+      )cpp"},
+      // TODO: Subexpression on operator overload, middle-aligned
+      // TODO: Subexpression on operator overload, right-aligned
+      // TODO: Collects deeply nested arguments, left-aligned
+      // TODO: Collects deeply nested arguments, middle-aligned
+      // TODO: Collects deeply nested arguments, right-aligned
       // TODO: Weirdly selected subexpr: op selected, but no LHS
       // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
       // TODO: Weirdly selected subexpr: no most-right RHS selected
