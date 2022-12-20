@@ -942,8 +942,76 @@ void wrapperFun() {
   auto& LS5{extracted(LS1, LS2, LS3) + LS4};
 }
       )cpp"},
-      // TODO: Subexpression on operator overload, middle-aligned
-      // TODO: Subexpression on operator overload, right-aligned
+      // Subexpression on operator overload, middle-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + [[LS2.get() + LS3 + LS4.get()]] + LS5};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS2, LargeStruct &LS3, LargeStruct &LS4) {
+return LS2.get() + LS3 + LS4.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + extracted(LS2, LS3, LS4) + LS5};
+}
+      )cpp"},
+      // Subexpression on operator overload, right-aligned
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + LS2.get() + [[LS3 + LS4.get() + LS5]]};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS3, LargeStruct &LS4, LargeStruct &LS5) {
+return LS3 + LS4.get() + LS5;
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4, LS5;
+  auto& R{LS1 + LS2.get() + extracted(LS3, LS4, LS5)};
+}
+      )cpp"}
       // TODO: Collects deeply nested arguments, left-aligned
       // TODO: Collects deeply nested arguments, middle-aligned
       // TODO: Collects deeply nested arguments, right-aligned
