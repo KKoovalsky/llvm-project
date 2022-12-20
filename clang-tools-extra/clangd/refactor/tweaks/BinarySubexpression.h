@@ -58,17 +58,17 @@ public:
       if (!Op->isInfixBinaryOp())
         return std::nullopt;
 
-      llvm::SmallVector<const SelectionTree::Node *> SelectedOperands;
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOps;
       // Not all children are args, there's also the callee (operator).
       for (const auto *Child : N.Children) {
         const Expr *E = Child->ASTNode.get<Expr>();
         assert(E && "callee and args should be Exprs!");
         if (E == Op->getArg(0) || E == Op->getArg(1))
-          SelectedOperands.push_back(Child);
+          SelectedOps.push_back(Child);
       }
       return BinarySubexpressionSelection{
           SM, BinaryOperator::getOverloadedOpcode(Op->getOperator()),
-          Op->getExprLoc(), std::move(SelectedOperands)};
+          Op->getExprLoc(), std::move(SelectedOps)};
     }
     return std::nullopt;
   }
@@ -113,9 +113,9 @@ protected:
 private:
   BinarySubexpressionSelection(
       const SourceManager *SM, BinaryOperatorKind Kind, SourceLocation ExprLoc,
-      llvm::SmallVector<const SelectionTree::Node *> SelectedOperands)
+      llvm::SmallVector<const SelectionTree::Node *> SelectedOps)
       : SM{SM}, Kind(Kind), ExprLoc(ExprLoc),
-        SelectedOperations(std::move(SelectedOperands)) {}
+        SelectedOperations(std::move(SelectedOps)) {}
 
   SelectedOperands getSelectedOperands() const {
     auto [Start, End]{getClosedRangeWithSelectedOperations()};
