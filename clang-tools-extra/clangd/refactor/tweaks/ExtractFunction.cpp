@@ -57,6 +57,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
@@ -125,18 +126,25 @@ bool isRootStmt(const Node *N) {
 // having to change the selection range. Also, this means that any scope that
 // begins in selection range, ends in selection range and any scope that begins
 // outside the selection range, ends outside as well.
+ASTContext *ASTCONT{nullptr};
 const Node *getParentOfRootStmts(const Node *CommonAnc) {
   if (!CommonAnc)
     return nullptr;
   const Node *Parent = nullptr;
   switch (CommonAnc->Selected) {
   case SelectionTree::Selection::Unselected:
+    // Workaround for an operator call: BinaryOperator will be selecteded
+    // completely, but the operator call would be unselected, thus we treat it
+    // as it would be completely selected.
+    if (CommonAnc->ASTNode.get<CXXOperatorCallExpr>() != nullptr)
+      return CommonAnc->Parent;
     // Typically a block, with the { and } unselected, could also be ForStmt etc
     // Ensure all Children are RootStmts.
     Parent = CommonAnc;
     break;
   case SelectionTree::Selection::Partial:
     // Only a fully-selected single statement can be selected.
+    vlog("PARTIAL");
     return nullptr;
   case SelectionTree::Selection::Complete:
     // If the Common Ancestor is completely selected, then it's a root statement
