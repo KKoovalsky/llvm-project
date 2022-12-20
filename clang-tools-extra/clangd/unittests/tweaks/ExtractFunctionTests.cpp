@@ -618,6 +618,21 @@ void wrapperFun() {
       {R"cpp(
 void wrapperFun() {
   int a{2}, b{3}, c{31}, d{13};
+  auto v{[[a + b]] + c + d};
+}
+      )cpp",
+       R"cpp(
+int extracted(int &a, int &b) {
+return a + b;
+}
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
+  auto v{extracted(a, b) + c + d};
+}
+      )cpp"},
+      {R"cpp(
+void wrapperFun() {
+  int a{2}, b{3}, c{31}, d{13};
   auto v{[[a + b + c]] + d};
 }
       )cpp",
