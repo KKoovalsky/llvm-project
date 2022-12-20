@@ -126,7 +126,6 @@ bool isRootStmt(const Node *N) {
 // having to change the selection range. Also, this means that any scope that
 // begins in selection range, ends in selection range and any scope that begins
 // outside the selection range, ends outside as well.
-ASTContext *ASTCONT{nullptr};
 const Node *getParentOfRootStmts(const Node *CommonAnc) {
   if (!CommonAnc)
     return nullptr;
