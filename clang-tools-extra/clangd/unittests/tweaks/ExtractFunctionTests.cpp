@@ -908,6 +908,40 @@ void wrapperFun() {
   auto& LS5{extracted(LS1, LS2) + LS3.get() + LS4};
 }
       )cpp"},
+      {
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{[[LS1 + LS2.get() + LS3.get()]] + LS4};
+}
+      )cpp",
+          R"cpp(
+struct LargeStruct {
+  char LargeMember[1024];
+  const LargeStruct& get() {
+    return *this;
+  }
+  LargeStruct& operator+(const LargeStruct&) {
+    return *this;
+  }
+};
+LargeStruct & extracted(LargeStruct &LS1, LargeStruct &LS2, LargeStruct &LS3) {
+return LS1 + LS2.get() + LS3.get();
+}
+void wrapperFun() {
+  LargeStruct LS1, LS2, LS3, LS4;
+  auto& LS5{extracted(LS1, LS2, LS3) + LS4};
+}
+      )cpp"},
       // TODO: Subexpression on operator overload, middle-aligned
       // TODO: Subexpression on operator overload, right-aligned
       // TODO: Collects deeply nested arguments, left-aligned

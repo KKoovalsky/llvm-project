@@ -74,7 +74,7 @@ public:
   }
 
   bool associative() const {
-    // Must also be left-associative, or update getBinaryOperatorRange()!
+    // Must also be left-associative!
     switch (Kind) {
     case BO_Add:
     case BO_Mul:
@@ -129,9 +129,14 @@ private:
     llvm::SmallVector<const SelectionTree::Node *> Operands;
     Operands.reserve(SelectedOperations.size());
     const SelectionTree::Node *BinOpSelectionIt{Start->Parent};
+
     // Edge case: the selection starts from the most-left LHS, e.g. [[a+b+c]]+d
     if (BinOpSelectionIt->Children.size() == 2)
       Operands.emplace_back(BinOpSelectionIt->Children.front()); // LHS
+    // In case of operator+ call, the Children will contain the calle as well.
+    else if (BinOpSelectionIt->Children.size() == 3)
+      Operands.emplace_back(BinOpSelectionIt->Children[1]); // LHS
+
     // Go up the Binary Operation three, up to the most-right RHS
     for (; BinOpSelectionIt->Children.back() != End;
          BinOpSelectionIt = BinOpSelectionIt->Parent)
