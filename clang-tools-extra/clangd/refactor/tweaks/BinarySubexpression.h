@@ -256,13 +256,12 @@ struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
         Operands{std::move(SelectedOps)} {}
 
   SourceRange getRange(const LangOptions &LangOpts) const {
-    return SourceRange(
-        toHalfOpenFileRange(*SM, LangOpts,
-                            Operands.Start->ASTNode.getSourceRange())
-            ->getBegin(),
-        toHalfOpenFileRange(*SM, LangOpts,
-                            Operands.End->ASTNode.getSourceRange())
-            ->getEnd());
+    auto MakeHalfOpenFileRange{[&](const SelectionTree::Node *N) {
+      return toHalfOpenFileRange(*SM, LangOpts, N->ASTNode.getSourceRange());
+    }};
+
+    return SourceRange(MakeHalfOpenFileRange(Operands.Start)->getBegin(),
+                       MakeHalfOpenFileRange(Operands.End)->getEnd());
   }
 
   void dumpSelectedOperands(llvm::raw_ostream &Os,
