@@ -101,6 +101,12 @@ public:
     return associative() and not crossesMacroBoundary();
   }
 
+  void dumpSelectedOperations(llvm::raw_ostream &Os,
+                              const ASTContext &Cont) const {
+    for (const auto *Op : SelectedOperations)
+      Op->ASTNode.dump(Os, Cont);
+  }
+
   std::optional<ExtractedBinarySubexpressionSelection> tryExtract() const;
 
 protected:
