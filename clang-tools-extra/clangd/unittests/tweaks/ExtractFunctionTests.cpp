@@ -582,10 +582,6 @@ int getNum(bool Superstitious, int Min, int Max) {
 TEST_F(ExtractFunctionTest, Expressions) {
 
   // TODO: UNAVAILABLE CASES:
-  // TODO: Full binary expression with macro
-  // TODO: Partially selected expression with macro, selection left-aligned
-  // TODO: Partially selected expression with macro, selection right-aligned
-  // TODO: Partially selected expression with macro, selection in the middle
 
   std::vector<std::pair<std::string, std::string>> InputOutputs{
       // FULL BINARY EXPRESSIONS
@@ -1075,6 +1071,20 @@ void wrapper() {
     int r{fw(fw(fw(a))) + extracted(b, c, d, e, f)};
 }
       )cpp"},
+      // FIXME: Support macros: In this case the most-LHS is not omitted!
+      {R"cpp(
+#define ECHO(X) X
+void f() {
+    int x = 1 + [[ECHO(2 + 3) + 4]] + 5;
+})cpp",
+       R"cpp(
+#define ECHO(X) X
+int extracted() {
+return 1 + ECHO(2 + 3) + 4;
+}
+void f() {
+    int x = extracted() + 5;
+})cpp"},
       // TODO: Weirdly selected subexpr: op selected, but no LHS
       // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
       // TODO: Weirdly selected subexpr: no most-right RHS selected
