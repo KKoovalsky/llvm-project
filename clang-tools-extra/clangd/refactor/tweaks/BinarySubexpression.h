@@ -192,67 +192,6 @@ protected:
   llvm::SmallVector<const SelectionTree::Node *> SelectedOperations;
 };
 
-struct ParsedBinaryOperator {
-  BinaryOperatorKind Kind;
-  SourceLocation ExprLoc;
-  llvm::SmallVector<const SelectionTree::Node *> SelectedOperands;
-
-  // If N is a binary operator, populate this and return true.
-  inline bool parse(const SelectionTree::Node &N) {
-    SelectedOperands.clear();
-
-    if (const BinaryOperator *Op =
-            llvm::dyn_cast_or_null<BinaryOperator>(N.ASTNode.get<Expr>())) {
-      Kind = Op->getOpcode();
-      ExprLoc = Op->getExprLoc();
-      SelectedOperands = N.Children;
-      return true;
-    }
-    if (const CXXOperatorCallExpr *Op =
-            llvm::dyn_cast_or_null<CXXOperatorCallExpr>(
-                N.ASTNode.get<Expr>())) {
-      if (!Op->isInfixBinaryOp())
-        return false;
-
-      Kind = BinaryOperator::getOverloadedOpcode(Op->getOperator());
-      ExprLoc = Op->getExprLoc();
-      // Not all children are args, there's also the callee (operator).
-      for (const auto *Child : N.Children) {
-        const Expr *E = Child->ASTNode.get<Expr>();
-        assert(E && "callee and args should be Exprs!");
-        if (E == Op->getArg(0) || E == Op->getArg(1))
-          SelectedOperands.push_back(Child);
-      }
-      return true;
-    }
-    return false;
-  }
-
-  bool associative() const {
-    // Must also be left-associative, or update getBinaryOperatorRange()!
-    switch (Kind) {
-    case BO_Add:
-    case BO_Mul:
-    case BO_And:
-    case BO_Or:
-    case BO_Xor:
-    case BO_LAnd:
-    case BO_LOr:
-      return true;
-    default:
-      return false;
-    }
-  }
-
-  bool crossesMacroBoundary(const SourceManager &SM) {
-    FileID F = SM.getFileID(ExprLoc);
-    for (const SelectionTree::Node *Child : SelectedOperands)
-      if (SM.getFileID(Child->ASTNode.get<Expr>()->getExprLoc()) != F)
-        return true;
-    return false;
-  }
-};
-
 struct ExtractedBinarySubexpressionSelection : BinarySubexpressionSelection {
   ExtractedBinarySubexpressionSelection(BinarySubexpressionSelection BinSubexpr,
                                         SelectedOperands SelectedOps)
@@ -298,53 +237,5 @@ BinarySubexpressionSelection::tryExtract() const {
   if (not isExtractable())
     return std::nullopt;
   return ExtractedBinarySubexpressionSelection{*this, getSelectedOperands()};
-}
-// If have an associative operator at the top level, then we must find
-// the start point (rightmost in LHS) and end point (leftmost in RHS).
-// We can only descend into subtrees where the operator matches.
-//
-// e.g. for a + [[b + c]] + d
-//        +
-//       / \
-//  N-> +   d
-//     / \
-//    +   c <- End
-//   / \
-//  a   b <- Start
-inline const SourceRange getBinaryOperatorRange(const SelectionTree::Node &N,
-                                                const SourceManager &SM,
-                                                const LangOptions &LangOpts) {
-  // If N is not a suitable binary operator, bail out.
-  ParsedBinaryOperator Op;
-  if (!Op.parse(N.ignoreImplicit()) || !Op.associative() ||
-      Op.crossesMacroBoundary(SM) || Op.SelectedOperands.size() != 2)
-    return SourceRange();
-  BinaryOperatorKind OuterOp = Op.Kind;
-
-  // Because the tree we're interested in contains only one operator type, and
-  // all eligible operators are left-associative, the shape of the tree is
-  // very restricted: it's a linked list along the left edges.
-  // This simplifies our implementation.
-  const SelectionTree::Node *Start = Op.SelectedOperands.front(); // LHS
-  const SelectionTree::Node *End = Op.SelectedOperands.back();    // RHS
-  // End is already correct: it can't be an OuterOp (as it's
-  // left-associative). Start needs to be pushed down int the subtree to the
-  // right spot.
-  while (Op.parse(Start->ignoreImplicit()) && Op.Kind == OuterOp &&
-         !Op.crossesMacroBoundary(SM)) {
-    assert(!Op.SelectedOperands.empty() && "got only operator on one side!");
-    if (Op.SelectedOperands.size() == 1) { // Only Op.RHS selected
-      Start = Op.SelectedOperands.back();
-      break;
-    }
-    // Op.LHS is (at least partially) selected, so descend into it.
-    Start = Op.SelectedOperands.front();
-  }
-
-  return SourceRange(
-      toHalfOpenFileRange(SM, LangOpts, Start->ASTNode.getSourceRange())
-          ->getBegin(),
-      toHalfOpenFileRange(SM, LangOpts, End->ASTNode.getSourceRange())
-          ->getEnd());
 }
 } // namespace clang::clangd
