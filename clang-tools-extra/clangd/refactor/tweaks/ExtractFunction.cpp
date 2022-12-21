@@ -143,7 +143,6 @@ const Node *getParentOfRootStmts(const Node *CommonAnc) {
     break;
   case SelectionTree::Selection::Partial:
     // Only a fully-selected single statement can be selected.
-    vlog("PARTIAL");
     return nullptr;
   case SelectionTree::Selection::Complete:
     // If the Common Ancestor is completely selected, then it's a root statement
@@ -760,9 +759,9 @@ createParamsForSubexpr(const CapturedZoneInfo &CapturedInfo,
   for (const auto *Ref : Subexpr.collectReferences(ASTCont)) {
     const auto *D{Ref->getDecl()};
     const auto *VD{unpackDeclForParameter(D)};
-    // In case no unpacking was possible, bail out.
+    // Only collect the ValueDecl-s.
     if (VD == nullptr)
-      return std::nullopt;
+      continue;
     const auto *DeclInfo{CapturedInfo.getDeclInfoFor(D)};
     if (DeclInfo == nullptr or DeclInfo->DeclaredIn != ZoneRelative::Before)
       continue;

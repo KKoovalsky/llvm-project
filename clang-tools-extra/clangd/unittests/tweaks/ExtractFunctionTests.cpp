@@ -1011,10 +1011,70 @@ void wrapperFun() {
   LargeStruct LS1, LS2, LS3, LS4, LS5;
   auto& R{LS1 + LS2.get() + extracted(LS3, LS4, LS5)};
 }
-      )cpp"}
-      // TODO: Collects deeply nested arguments, left-aligned
-      // TODO: Collects deeply nested arguments, middle-aligned
-      // TODO: Collects deeply nested arguments, right-aligned
+      )cpp"},
+      // Collects deeply nested arguments, left-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{[[fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e))))]] + fw(fw(f))};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &a, int &b, int &c, int &d, int &e) {
+return fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e))));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{extracted(a, b, c, d, e) + fw(fw(f))};
+}
+      )cpp"},
+      // Collects deeply nested arguments, middle-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + [[fw(fw(add(b, c))) + fw(fw(fw(add(d, e))))]] + fw(fw(f))};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &b, int &c, int &d, int &e) {
+return fw(fw(add(b, c))) + fw(fw(fw(add(d, e))));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + extracted(b, c, d, e) + fw(fw(f))};
+}
+      )cpp"},
+      // Collects deeply nested arguments, right-aligned
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + [[fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f))]]};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &b, int &c, int &d, int &e, int &f) {
+return fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{fw(fw(fw(a))) + extracted(b, c, d, e, f)};
+}
+      )cpp"},
       // TODO: Weirdly selected subexpr: op selected, but no LHS
       // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
       // TODO: Weirdly selected subexpr: no most-right RHS selected
