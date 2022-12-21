@@ -580,9 +580,6 @@ int getNum(bool Superstitious, int Min, int Max) {
 }
 
 TEST_F(ExtractFunctionTest, Expressions) {
-
-  // TODO: UNAVAILABLE CASES:
-
   std::vector<std::pair<std::string, std::string>> InputOutputs{
       // FULL BINARY EXPRESSIONS
       // Full binary expression, basic maths
@@ -1085,9 +1082,6 @@ return 1 + ECHO(2 + 3) + 4;
 void f() {
     int x = extracted() + 5;
 })cpp"},
-      // TODO: Weirdly selected subexpr: op selected, but no LHS
-      // TODO: Weirdly selected subexpr: op selected, but no LHS and no most-RHS
-      // TODO: Weirdly selected subexpr: no most-right RHS selected
   };
 
   for (const auto &[Input, Output] : InputOutputs) {
