@@ -598,14 +598,72 @@ void wrapperFun() {
   double v{extracted(a, b, c)};
 }
       )cpp"},
-      // TODO: Full binary expression composed of '+' operator overloads ops
-      // TODO: Full binary expression where both operands are function calls
-      // TODO: Full binary expression, non-associative operator
-      // TODO: Full binary expression, right-associative operator
-      // TODO: Expression: captures no global variable
+      // Full binary expression composed of '+' operator overloads ops
+      {
+          R"cpp(
+struct S {
+  S operator+(const S&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  S operator+(const S&) {
+    return *this;
+  }
+};
+S extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
+      // Boolean predicate as expression
+      {
+          R"cpp(
+void wrapperFun() {
+  int a{1};
+  auto R{[[a > 1]]};
+}
+      )cpp",
+          R"cpp(
+bool extracted(int &a) {
+return a > 1;
+}
+void wrapperFun() {
+  int a{1};
+  auto R{extracted(a)};
+}
+      )cpp"},
+      // Expression: captures no global variable
+      {R"cpp(
+static int a{2};
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{[[a + b + c + d]]};
+}
+      )cpp",
+       R"cpp(
+static int a{2};
+int extracted(int &b, int &c, int &d) {
+return a + b + c + d;
+}
+void wrapperFun() {
+  int b{3}, c{31}, d{311};
+  auto v{extracted(b, c, d)};
+}
+      )cpp"},
       // TODO: Full expr: infers return type of call returning by val
       // TODO: Full expr: infers return type of call returning by ref
       // TODO: Full expr: infers return type of call returning by const-ref
+      // TODO: Captures deeply nested arguments
       // SUBEXPRESSIONS
       // Left-aligned subexpression
       {R"cpp(
@@ -985,8 +1043,7 @@ struct LargeStruct {
 void wrapperFun() {
   LargeStruct LS1, LS2, LS3, LS4, LS5;
   auto& R{LS1 + LS2.get() + [[LS3 + LS4.get() + LS5]]};
-}
-      )cpp",
+})cpp",
           R"cpp(
 struct LargeStruct {
   char LargeMember[1024];
@@ -1003,6 +1060,22 @@ return LS3 + LS4.get() + LS5;
 void wrapperFun() {
   LargeStruct LS1, LS2, LS3, LS4, LS5;
   auto& R{LS1 + LS2.get() + extracted(LS3, LS4, LS5)};
+})cpp"},
+      // Boolean predicate as subexpression
+      {
+          R"cpp(
+void wrapperFun() {
+  int a{1}, b{2};
+  auto R{a > 1 ? [[b <= 0]] : false};
+}
+      )cpp",
+          R"cpp(
+bool extracted(int &b) {
+return b <= 0;
+}
+void wrapperFun() {
+  int a{1}, b{2};
+  auto R{a > 1 ? extracted(b) : false};
 }
       )cpp"},
       // Collects deeply nested arguments, left-aligned
@@ -1089,10 +1162,16 @@ void f() {
   }
 }
 
-TEST_F(ExtractFunctionTest, ExpressionsInMethods) {
+TEST_F(ExtractFunctionTest, ExpressionsInMethodsSingleFile) {
   // TODO: unavailable
   // TODO: available
+
+  // TODO: Mutates a member through non-const function
+  // TODO: Derives constness
+  // TODO: Inline expression which mutates a member
 }
+
+TEST_F(ExtractFunctionTest, ExpressionsInMethodsMultiFile) {}
 
 } // namespace
 } // namespace clangd
