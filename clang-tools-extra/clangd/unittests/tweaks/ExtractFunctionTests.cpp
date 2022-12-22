@@ -660,9 +660,60 @@ void wrapperFun() {
   auto v{extracted(b, c, d)};
 }
       )cpp"},
-      // TODO: Full expr: infers return type of call returning by val
-      // TODO: Full expr: infers return type of call returning by ref
-      // TODO: Full expr: infers return type of call returning by const-ref
+      // Full expr: infers return type of call returning by ref
+      {
+          R"cpp(
+struct S {
+  S& operator+(const S&) {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  S& operator+(const S&) {
+    return *this;
+  }
+};
+S & extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
+      // Full expr: infers return type of call returning by const-ref
+      {
+          R"cpp(
+struct S {
+  const S& operator+(const S&) const {
+    return *this;
+  }
+};
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{[[S1 + S2 + S3]]};
+}
+      )cpp",
+          R"cpp(
+struct S {
+  const S& operator+(const S&) const {
+    return *this;
+  }
+};
+const S & extracted(S &S1, S &S2, S &S3) {
+return S1 + S2 + S3;
+}
+void wrapperFun() {
+  S S1, S2, S3;
+  auto R{extracted(S1, S2, S3)};
+}
+      )cpp"},
       // TODO: Captures deeply nested arguments
       // SUBEXPRESSIONS
       // Left-aligned subexpression
