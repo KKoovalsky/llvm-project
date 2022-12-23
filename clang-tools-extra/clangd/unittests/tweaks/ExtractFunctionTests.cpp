@@ -1237,12 +1237,136 @@ TEST_F(ExtractFunctionTest, ExpressionsInMethodsSingleFile) {
   // TODO: unavailable
   // TODO: available
 
-  // TODO: Mutates a member through non-const function
-  // TODO: Derives constness
-  // TODO: Inline expression which mutates a member
+  std::vector<std::pair<std::string, std::string>> InputOutputs{
+      // Expression: Does not capture members as parameters
+      // FIXME: If selected area does mutate members, make extracted() const
+      {R"cpp(
+struct S {
+void f() const {
+    int a{1}, b{2};
+    auto r{[[a + b + mem1 + mem2]]};
+}
+int mem1{0}, mem2{0};
+};
+)cpp",
+       R"cpp(
+struct S {
+int extracted(int &a, int &b) const {
+return a + b + mem1 + mem2;
+}
+void f() const {
+    int a{1}, b{2};
+    auto r{extracted(a, b)};
+}
+int mem1{0}, mem2{0};
+};
+)cpp"},
+      // Subexpression: Does not capture members as parameters
+      {R"cpp(
+struct S {
+void f() const {
+    int a{1}, b{2};
+    auto r{a + [[mem1 + mem2 + b + mem1]] + mem2};
+}
+int mem1{0}, mem2{0};
+};
+)cpp",
+       R"cpp(
+struct S {
+int extracted(int &b) const {
+return mem1 + mem2 + b + mem1;
+}
+void f() const {
+    int a{1}, b{2};
+    auto r{a + extracted(b) + mem2};
+}
+int mem1{0}, mem2{0};
+};
+)cpp"},
+  };
+
+  for (const auto &[Input, Output] : InputOutputs) {
+    EXPECT_EQ(Output, apply(Input)) << Input;
+  }
 }
 
-TEST_F(ExtractFunctionTest, ExpressionsInMethodsMultiFile) {}
+TEST_F(ExtractFunctionTest, ExpressionInMethodMultiFile) {
+  Header = R"cpp(
+    class SomeClass {
+      void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  std::string OutOfLineSource = R"cpp(
+    void SomeClass::f() {
+      int a{1}, b{2};
+      int x = [[a + mem1 + b + mem2]];
+    }
+  )cpp";
+
+  std::string OutOfLineSourceOutputCheck = R"cpp(
+    int SomeClass::extracted(int &a, int &b) {
+return a + mem1 + b + mem2;
+}
+void SomeClass::f() {
+      int a{1}, b{2};
+      int x = extracted(a, b);
+    }
+  )cpp";
+
+  std::string HeaderOutputCheck = R"cpp(
+    class SomeClass {
+      int extracted(int &a, int &b);
+void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  llvm::StringMap<std::string> EditedFiles;
+
+  EXPECT_EQ(apply(OutOfLineSource, &EditedFiles), OutOfLineSourceOutputCheck);
+  EXPECT_EQ(EditedFiles.begin()->second, HeaderOutputCheck);
+}
+
+TEST_F(ExtractFunctionTest, SubexpressionInMethodMultiFile) {
+  Header = R"cpp(
+    class SomeClass {
+      void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  std::string OutOfLineSource = R"cpp(
+    void SomeClass::f() {
+      int a{1}, b{2};
+      int x = a + [[mem1 + b + mem2]] + mem1;
+    }
+  )cpp";
+
+  std::string OutOfLineSourceOutputCheck = R"cpp(
+    int SomeClass::extracted(int &b) {
+return mem1 + b + mem2;
+}
+void SomeClass::f() {
+      int a{1}, b{2};
+      int x = a + extracted(b) + mem1;
+    }
+  )cpp";
+
+  std::string HeaderOutputCheck = R"cpp(
+    class SomeClass {
+      int extracted(int &b);
+void f();
+      int mem1{0}, mem2{0};
+    };
+  )cpp";
+
+  llvm::StringMap<std::string> EditedFiles;
+
+  EXPECT_EQ(apply(OutOfLineSource, &EditedFiles), OutOfLineSourceOutputCheck);
+  EXPECT_EQ(EditedFiles.begin()->second, HeaderOutputCheck);
+}
 
 } // namespace
 } // namespace clangd
