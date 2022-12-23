@@ -714,7 +714,27 @@ void wrapperFun() {
   auto R{extracted(S1, S2, S3)};
 }
       )cpp"},
-      // TODO: Captures deeply nested arguments
+      // Captures deeply nested arguments
+      {
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{[[fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f))]]};
+}
+      )cpp",
+          R"cpp(
+int fw(int a) { return a; };
+int add(int a, int b) { return a + b; }
+int extracted(int &a, int &b, int &c, int &d, int &e, int &f) {
+return fw(fw(fw(a))) + fw(fw(add(b, c))) + fw(fw(fw(add(d, e)))) + fw(fw(f));
+}
+void wrapper() {
+    int a{0}, b{1}, c{2}, d{3}, e{4}, f{5};
+    int r{extracted(a, b, c, d, e, f)};
+}
+      )cpp"},
       // SUBEXPRESSIONS
       // Left-aligned subexpression
       {R"cpp(
