@@ -18,6 +18,7 @@
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtCXX.h"
+#include "clang/AST/Type.h"
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
@@ -216,7 +217,17 @@ ExtractionContext::insertDeclaration(llvm::StringRef VarName,
 
 std::string ExtractionContext::printVarWithType(llvm::StringRef VarName) const {
   if (Ctx.getLangOpts().CPlusPlus11) {
-    return std::string{"auto "} + (Expr->isLValue() ? "&" : "") + VarName.str();
+    std::string Result;
+    Result.reserve(20);
+    auto IsConst{VarType.isConstQualified()};
+    auto IsRef{Expr->isLValue()};
+    if (IsConst and IsRef)
+      Result.append("const ");
+    Result.append("auto ");
+    if (IsRef)
+      Result.append("&");
+    Result.append(VarName);
+    return Result;
   }
   return printType(VarType, ExprNode->getDeclContext(), VarName);
 }
