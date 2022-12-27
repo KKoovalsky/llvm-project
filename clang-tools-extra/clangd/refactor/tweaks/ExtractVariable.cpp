@@ -219,7 +219,7 @@ std::string ExtractionContext::printVarWithType(llvm::StringRef VarName) const {
   if (Ctx.getLangOpts().CPlusPlus11) {
     std::string Result;
     Result.reserve(20);
-    auto IsConst{VarType.isConstQualified()};
+    auto IsConst{VarType.getNonReferenceType().isConstQualified()};
     auto IsRef{Expr->isLValue()};
     if (IsConst and IsRef)
       Result.append("const ");
