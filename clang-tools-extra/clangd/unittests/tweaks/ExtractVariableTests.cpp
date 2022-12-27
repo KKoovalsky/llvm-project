@@ -282,6 +282,24 @@ TEST_F(ExtractVariableTest, Test) {
                  void f() {
                    auto placeholder = S(2) + S(3) + S(4); S x = S(1) + placeholder + S(5);
                  })cpp"},
+      {R"cpp(struct S{
+                S& get() {
+                    return *this;
+                }
+             };
+             void f() {
+               S s;
+               auto x{[[s.get()]]};
+             })cpp",
+       R"cpp(struct S{
+                S& get() {
+                    return *this;
+                }
+             };
+             void f() {
+               S s;
+               auto &placeholder = s.get(); auto x{placeholder};
+             })cpp"},
       // Don't try to analyze across macro boundaries
       // FIXME: it'd be nice to do this someday (in a safe way)
       {R"cpp(#define ECHO(X) X
