@@ -49,6 +49,9 @@ public:
                                          SourceRange InitChars) const;
 
 private:
+  // Print variable type with it's name
+  std::string printVarWithType(llvm::StringRef VarName) const;
+
   bool Extractable = false;
   const clang::Expr *Expr;
   QualType VarType;
@@ -85,7 +88,7 @@ computeReferencedDecls(const clang::Expr *Expr) {
 
 static QualType computeVariableType(const Expr *Expr, const ASTContext &Ctx) {
   if (Ctx.getLangOpts().CPlusPlus11)
-    return Ctx.getAutoDeductType();
+    return Ctx.getReferenceQualifiedType(Expr);
 
   if (Expr->hasPlaceholderType(BuiltinType::PseudoObject)) {
     if (const auto *PR = dyn_cast<ObjCPropertyRefExpr>(Expr)) {
@@ -207,9 +210,15 @@ ExtractionContext::insertDeclaration(llvm::StringRef VarName,
                           InsertionPoint->getSourceRange())
           ->getBegin();
   std::string ExtractedVarDecl =
-      printType(VarType, ExprNode->getDeclContext(), VarName) + " = " +
-      ExtractionCode.str() + "; ";
+      printVarWithType(VarName) + " = " + ExtractionCode.str() + "; ";
   return tooling::Replacement(SM, InsertionLoc, 0, ExtractedVarDecl);
+}
+
+std::string ExtractionContext::printVarWithType(llvm::StringRef VarName) const {
+  if (Ctx.getLangOpts().CPlusPlus11) {
+    return std::string{"auto "} + (Expr->isLValue() ? "&" : "") + VarName.str();
+  }
+  return printType(VarType, ExprNode->getDeclContext(), VarName);
 }
 
 // Helpers for handling "binary subexpressions" like a + [[b + c]] + d.
