@@ -16,7 +16,6 @@ endif()
 clang_target_link_libraries(clangd
   PRIVATE
   clangAST
-  clangASTMatchers
   clangBasic
   clangFormat
   clangFrontend
