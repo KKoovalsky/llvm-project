@@ -330,6 +330,8 @@ bool isRootStmt(const Node *N) {
 // begins in selection range, ends in selection range and any scope that begins
 // outside the selection range, ends outside as well.
 const Node *getParentOfRootStmts(const Node *CommonAnc) {
+  if (!CommonAnc)
+    return nullptr;
   const Node *Parent = nullptr;
   switch (CommonAnc->Selected) {
   case SelectionTree::Selection::Unselected:
@@ -519,8 +521,6 @@ bool isEntireFunctionBodySelected(const ExtractionZone &ExtZone) {
 llvm::Optional<ExtractionZone> findExtractionZone(const Node *CommonAnc,
                                                   const SourceManager &SM,
                                                   const LangOptions &LangOpts) {
-  if (CommonAnc == nullptr)
-    return std::nullopt;
   ExtractionZone ExtZone;
   ExtZone.CommonAncestor = CommonAnc;
   auto MaybeBinarySubexpr{
