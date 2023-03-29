@@ -30,11 +30,12 @@ _LIBCPP_PUSH_MACROS
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-#if _LIBCPP_STD_VER > 17
+#if _LIBCPP_STD_VER >= 20
 
 // [cmp.alg]
 namespace __strong_order {
     struct __fn {
+    // NOLINTBEGIN(libcpp-robust-against-adl) strong_order should use ADL, but only here
         template<class _Tp, class _Up>
             requires is_same_v<decay_t<_Tp>, decay_t<_Up>>
         _LIBCPP_HIDE_FROM_ABI static constexpr auto
@@ -42,6 +43,7 @@ namespace __strong_order {
             noexcept(noexcept(strong_ordering(strong_order(_VSTD::forward<_Tp>(__t), _VSTD::forward<_Up>(__u)))))
             -> decltype(      strong_ordering(strong_order(_VSTD::forward<_Tp>(__t), _VSTD::forward<_Up>(__u))))
             { return          strong_ordering(strong_order(_VSTD::forward<_Tp>(__t), _VSTD::forward<_Up>(__u))); }
+    // NOLINTEND(libcpp-robust-against-adl)
 
         template<class _Tp, class _Up, class _Dp = decay_t<_Tp>>
             requires is_same_v<_Dp, decay_t<_Up>> && is_floating_point_v<_Dp>
@@ -128,7 +130,7 @@ inline namespace __cpo {
     inline constexpr auto strong_order = __strong_order::__fn{};
 } // namespace __cpo
 
-#endif // _LIBCPP_STD_VER > 17
+#endif // _LIBCPP_STD_VER >= 20
 
 _LIBCPP_END_NAMESPACE_STD
 

@@ -28,7 +28,7 @@
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-#if _LIBCPP_STD_VER > 17
+#if _LIBCPP_STD_VER >= 20
 
 // [iter.cust.swap]
 
@@ -41,6 +41,7 @@ namespace __iter_swap {
   concept __unqualified_iter_swap =
     (__class_or_enum<remove_cvref_t<_T1>> || __class_or_enum<remove_cvref_t<_T2>>) &&
     requires (_T1&& __x, _T2&& __y) {
+      // NOLINTNEXTLINE(libcpp-robust-against-adl) iter_swap ADL calls should only be made through ranges::iter_swap
       iter_swap(_VSTD::forward<_T1>(__x), _VSTD::forward<_T2>(__y));
     };
 
@@ -49,7 +50,9 @@ namespace __iter_swap {
     indirectly_readable<_T1> && indirectly_readable<_T2> &&
     swappable_with<iter_reference_t<_T1>, iter_reference_t<_T2>>;
 
+
   struct __fn {
+    // NOLINTBEGIN(libcpp-robust-against-adl) iter_swap ADL calls should only be made through ranges::iter_swap
     template <class _T1, class _T2>
       requires __unqualified_iter_swap<_T1, _T2>
     _LIBCPP_HIDE_FROM_ABI
@@ -58,6 +61,7 @@ namespace __iter_swap {
     {
       (void)iter_swap(_VSTD::forward<_T1>(__x), _VSTD::forward<_T2>(__y));
     }
+    // NOLINTEND(libcpp-robust-against-adl)
 
     template <class _T1, class _T2>
       requires (!__unqualified_iter_swap<_T1, _T2>) &&
@@ -78,7 +82,7 @@ namespace __iter_swap {
     constexpr void operator()(_T1&& __x, _T2&& __y) const
       noexcept(noexcept(iter_value_t<_T2>(ranges::iter_move(__y))) &&
                noexcept(*__y = ranges::iter_move(__x)) &&
-               noexcept(*_VSTD::forward<_T1>(__x) = declval<iter_value_t<_T2>>()))
+               noexcept(*_VSTD::forward<_T1>(__x) = std::declval<iter_value_t<_T2>>()))
     {
       iter_value_t<_T2> __old(ranges::iter_move(__y));
       *__y = ranges::iter_move(__x);
@@ -102,7 +106,7 @@ concept indirectly_swappable =
     ranges::iter_swap(__i2, __i1);
   };
 
-#endif // _LIBCPP_STD_VER > 17
+#endif // _LIBCPP_STD_VER >= 20
 
 _LIBCPP_END_NAMESPACE_STD
 

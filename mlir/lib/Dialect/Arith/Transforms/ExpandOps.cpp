@@ -9,6 +9,7 @@
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/Dialect/Vector/IR/VectorOps.h"
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/DialectConversion.h"
 
@@ -24,8 +25,15 @@ using namespace mlir;
 /// Create an integer or index constant.
 static Value createConst(Location loc, Type type, int value,
                          PatternRewriter &rewriter) {
-  return rewriter.create<arith::ConstantOp>(
-      loc, rewriter.getIntegerAttr(type, value));
+
+  auto elTy = getElementTypeOrSelf(type);
+  auto constantAttr = rewriter.getIntegerAttr(elTy, value);
+
+  if (auto vecTy = llvm::dyn_cast<ShapedType>(type))
+    return rewriter.create<arith::ConstantOp>(
+        loc, vecTy, DenseElementsAttr::get(vecTy, constantAttr));
+
+  return rewriter.create<arith::ConstantOp>(loc, constantAttr);
 }
 
 namespace {
@@ -179,22 +187,6 @@ public:
   }
 };
 
-template <typename OpTy, arith::CmpIPredicate pred>
-struct MaxMinIOpConverter : public OpRewritePattern<OpTy> {
-public:
-  using OpRewritePattern<OpTy>::OpRewritePattern;
-  LogicalResult matchAndRewrite(OpTy op,
-                                PatternRewriter &rewriter) const final {
-    Value lhs = op.getLhs();
-    Value rhs = op.getRhs();
-
-    Location loc = op.getLoc();
-    Value cmp = rewriter.create<arith::CmpIOp>(loc, pred, lhs, rhs);
-    rewriter.replaceOpWithNewOp<arith::SelectOp>(op, cmp, lhs, rhs);
-    return success();
-  }
-};
-
 struct ArithExpandOpsPass
     : public arith::impl::ArithExpandOpsBase<ArithExpandOpsPass> {
   void runOnOperation() override {
@@ -210,11 +202,7 @@ struct ArithExpandOpsPass
       arith::CeilDivUIOp,
       arith::FloorDivSIOp,
       arith::MaxFOp,
-      arith::MaxSIOp,
-      arith::MaxUIOp,
-      arith::MinFOp,
-      arith::MinSIOp,
-      arith::MinUIOp
+      arith::MinFOp
     >();
     // clang-format on
     if (failed(applyPartialConversion(getOperation(), target,
@@ -237,11 +225,7 @@ void mlir::arith::populateArithExpandOpsPatterns(RewritePatternSet &patterns) {
   // clang-format off
   patterns.add<
     MaxMinFOpConverter<MaxFOp, arith::CmpFPredicate::UGT>,
-    MaxMinFOpConverter<MinFOp, arith::CmpFPredicate::ULT>,
-    MaxMinIOpConverter<MaxSIOp, arith::CmpIPredicate::sgt>,
-    MaxMinIOpConverter<MaxUIOp, arith::CmpIPredicate::ugt>,
-    MaxMinIOpConverter<MinSIOp, arith::CmpIPredicate::slt>,
-    MaxMinIOpConverter<MinUIOp, arith::CmpIPredicate::ult>
+    MaxMinFOpConverter<MinFOp, arith::CmpFPredicate::ULT>
    >(patterns.getContext());
   // clang-format on
 }

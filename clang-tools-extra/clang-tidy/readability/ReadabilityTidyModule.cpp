@@ -10,6 +10,7 @@
 #include "../ClangTidyModule.h"
 #include "../ClangTidyModuleRegistry.h"
 #include "AvoidConstParamsInDecls.h"
+#include "AvoidUnconditionalPreprocessorIfCheck.h"
 #include "BracesAroundStatementsCheck.h"
 #include "ConstReturnTypeCheck.h"
 #include "ContainerContainsCheck.h"
@@ -52,8 +53,7 @@
 #include "UppercaseLiteralSuffixCheck.h"
 #include "UseAnyOfAllOfCheck.h"
 
-namespace clang {
-namespace tidy {
+namespace clang::tidy {
 namespace readability {
 
 class ReadabilityModule : public ClangTidyModule {
@@ -61,6 +61,8 @@ public:
   void addCheckFactories(ClangTidyCheckFactories &CheckFactories) override {
     CheckFactories.registerCheck<AvoidConstParamsInDecls>(
         "readability-avoid-const-params-in-decls");
+    CheckFactories.registerCheck<AvoidUnconditionalPreprocessorIfCheck>(
+        "readability-avoid-unconditional-preprocessor-if");
     CheckFactories.registerCheck<BracesAroundStatementsCheck>(
         "readability-braces-around-statements");
     CheckFactories.registerCheck<ConstReturnTypeCheck>(
@@ -156,5 +158,4 @@ static ClangTidyModuleRegistry::Add<ReadabilityModule>
 // and thus register the ReadabilityModule.
 volatile int ReadabilityModuleAnchorSource = 0;
 
-} // namespace tidy
-} // namespace clang
+} // namespace clang::tidy

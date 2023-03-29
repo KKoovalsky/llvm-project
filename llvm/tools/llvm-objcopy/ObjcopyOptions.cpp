@@ -38,11 +38,13 @@ enum ObjcopyID {
 
 namespace objcopy_opt {
 #define PREFIX(NAME, VALUE)                                                    \
-  static constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "ObjcopyOpts.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info> ObjcopyInfoTable = {
+static constexpr opt::OptTable::Info ObjcopyInfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {PREFIX,          NAME,         HELPTEXT,                                    \
@@ -54,9 +56,9 @@ static constexpr std::initializer_list<opt::OptTable::Info> ObjcopyInfoTable = {
 };
 } // namespace objcopy_opt
 
-class ObjcopyOptTable : public opt::OptTable {
+class ObjcopyOptTable : public opt::GenericOptTable {
 public:
-  ObjcopyOptTable() : OptTable(objcopy_opt::ObjcopyInfoTable) {
+  ObjcopyOptTable() : opt::GenericOptTable(objcopy_opt::ObjcopyInfoTable) {
     setGroupedShortOptions(true);
   }
 };
@@ -73,12 +75,13 @@ enum InstallNameToolID {
 namespace install_name_tool {
 
 #define PREFIX(NAME, VALUE)                                                    \
-  constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "InstallNameToolOpts.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info>
-    InstallNameToolInfoTable = {
+static constexpr opt::OptTable::Info InstallNameToolInfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {PREFIX,                                                                     \
@@ -98,10 +101,10 @@ static constexpr std::initializer_list<opt::OptTable::Info>
 };
 } // namespace install_name_tool
 
-class InstallNameToolOptTable : public opt::OptTable {
+class InstallNameToolOptTable : public opt::GenericOptTable {
 public:
   InstallNameToolOptTable()
-      : OptTable(install_name_tool::InstallNameToolInfoTable) {}
+      : GenericOptTable(install_name_tool::InstallNameToolInfoTable) {}
 };
 
 enum BitcodeStripID {
@@ -116,12 +119,13 @@ enum BitcodeStripID {
 namespace bitcode_strip {
 
 #define PREFIX(NAME, VALUE)                                                    \
-  static constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "BitcodeStripOpts.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info>
-    BitcodeStripInfoTable = {
+static constexpr opt::OptTable::Info BitcodeStripInfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {PREFIX,                                                                     \
@@ -141,9 +145,10 @@ static constexpr std::initializer_list<opt::OptTable::Info>
 };
 } // namespace bitcode_strip
 
-class BitcodeStripOptTable : public opt::OptTable {
+class BitcodeStripOptTable : public opt::GenericOptTable {
 public:
-  BitcodeStripOptTable() : OptTable(bitcode_strip::BitcodeStripInfoTable) {}
+  BitcodeStripOptTable()
+      : opt::GenericOptTable(bitcode_strip::BitcodeStripInfoTable) {}
 };
 
 enum StripID {
@@ -157,11 +162,13 @@ enum StripID {
 
 namespace strip {
 #define PREFIX(NAME, VALUE)                                                    \
-  static constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "StripOpts.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info> StripInfoTable = {
+static constexpr opt::OptTable::Info StripInfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {PREFIX,        NAME,       HELPTEXT,                                        \
@@ -173,9 +180,9 @@ static constexpr std::initializer_list<opt::OptTable::Info> StripInfoTable = {
 };
 } // namespace strip
 
-class StripOptTable : public opt::OptTable {
+class StripOptTable : public opt::GenericOptTable {
 public:
-  StripOptTable() : OptTable(strip::StripInfoTable) {
+  StripOptTable() : GenericOptTable(strip::StripInfoTable) {
     setGroupedShortOptions(true);
   }
 };
@@ -235,7 +242,7 @@ static Expected<SectionRename> parseRenameSectionValue(StringRef FlagValue) {
 
   if (NameAndFlags.size() > 1) {
     Expected<SectionFlag> ParsedFlagSet =
-        parseSectionFlagSet(makeArrayRef(NameAndFlags).drop_front());
+        parseSectionFlagSet(ArrayRef(NameAndFlags).drop_front());
     if (!ParsedFlagSet)
       return ParsedFlagSet.takeError();
     SR.NewFlags = *ParsedFlagSet;
@@ -569,7 +576,7 @@ objcopy::parseObjcopyOptions(ArrayRef<const char *> RawArgsArr,
 
   const char *const *DashDash =
       llvm::find_if(RawArgsArr, [](StringRef Str) { return Str == "--"; });
-  ArrayRef<const char *> ArgsArr = makeArrayRef(RawArgsArr.begin(), DashDash);
+  ArrayRef<const char *> ArgsArr = ArrayRef(RawArgsArr.begin(), DashDash);
   if (DashDash != RawArgsArr.end())
     DashDash = std::next(DashDash);
 
@@ -1225,7 +1232,7 @@ objcopy::parseStripOptions(ArrayRef<const char *> RawArgsArr,
                            function_ref<Error(Error)> ErrorCallback) {
   const char *const *DashDash =
       llvm::find_if(RawArgsArr, [](StringRef Str) { return Str == "--"; });
-  ArrayRef<const char *> ArgsArr = makeArrayRef(RawArgsArr.begin(), DashDash);
+  ArrayRef<const char *> ArgsArr = ArrayRef(RawArgsArr.begin(), DashDash);
   if (DashDash != RawArgsArr.end())
     DashDash = std::next(DashDash);
 

@@ -43,6 +43,7 @@
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/LLVMDriver.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/ScopedPrinter.h"
 #include "llvm/Support/WithColor.h"
@@ -62,11 +63,13 @@ enum ID {
 };
 
 #define PREFIX(NAME, VALUE)                                                    \
-  static constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "Opts.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info> InfoTable = {
+static constexpr opt::OptTable::Info InfoTable[] = {
 #define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
                HELPTEXT, METAVAR, VALUES)                                      \
   {                                                                            \
@@ -78,9 +81,11 @@ static constexpr std::initializer_list<opt::OptTable::Info> InfoTable = {
 #undef OPTION
 };
 
-class ReadobjOptTable : public opt::OptTable {
+class ReadobjOptTable : public opt::GenericOptTable {
 public:
-  ReadobjOptTable() : OptTable(InfoTable) { setGroupedShortOptions(true); }
+  ReadobjOptTable() : opt::GenericOptTable(InfoTable) {
+    setGroupedShortOptions(true);
+  }
 };
 
 enum OutputFormatTy { bsd, sysv, posix, darwin, just_symbols };
@@ -131,6 +136,7 @@ static bool GnuHashTable;
 static bool HashSymbols;
 static bool HashTable;
 static bool HashHistogram;
+static bool Memtag;
 static bool NeededLibraries;
 static bool Notes;
 static bool ProgramHeaders;
@@ -261,6 +267,7 @@ static void parseOptions(const opt::InputArgList &Args) {
   opts::HashSymbols = Args.hasArg(OPT_hash_symbols);
   opts::HashTable = Args.hasArg(OPT_hash_table);
   opts::HashHistogram = Args.hasArg(OPT_histogram);
+  opts::Memtag = Args.hasArg(OPT_memtag);
   opts::NeededLibraries = Args.hasArg(OPT_needed_libs);
   opts::Notes = Args.hasArg(OPT_notes);
   opts::PrettyPrint = Args.hasArg(OPT_pretty_print);
@@ -468,6 +475,8 @@ static void dumpObject(ObjectFile &Obj, ScopedPrinter &Writer,
       Dumper->printAddrsig();
     if (opts::Notes)
       Dumper->printNotes();
+    if (opts::Memtag)
+      Dumper->printMemtag();
   }
   if (Obj.isCOFF()) {
     if (opts::COFFImports)
@@ -628,7 +637,7 @@ std::unique_ptr<ScopedPrinter> createWriter() {
   return std::make_unique<ScopedPrinter>(fouts());
 }
 
-int llvm_readobj_main(int argc, char **argv) {
+int llvm_readobj_main(int argc, char **argv, const llvm::ToolContext &) {
   InitLLVM X(argc, argv);
   BumpPtrAllocator A;
   StringSaver Saver(A);
@@ -679,6 +688,7 @@ int llvm_readobj_main(int argc, char **argv) {
       opts::Addrsig = true;
       opts::PrintStackSizes = true;
     }
+    opts::Memtag = true;
   }
 
   if (opts::Headers) {

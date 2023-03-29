@@ -209,7 +209,7 @@ void UnwindInfoSection::addSymbol(const Defined *d) {
   // If we have multiple symbols at the same address, only one of them can have
   // an associated unwind entry.
   if (!p.second && d->unwindEntry) {
-    assert(!p.first->second->unwindEntry);
+    assert(p.first->second == d || !p.first->second->unwindEntry);
     p.first->second = d;
   }
 }
@@ -405,7 +405,7 @@ void UnwindInfoSectionImpl::encodePersonalities() {
       personalityIndex = personalities.size();
     }
     cu.encoding |=
-        personalityIndex << countTrailingZeros(
+        personalityIndex << llvm::countr_zero(
             static_cast<compact_unwind_encoding_t>(UNWIND_PERSONALITY_MASK));
   }
   if (personalities.size() > 3)

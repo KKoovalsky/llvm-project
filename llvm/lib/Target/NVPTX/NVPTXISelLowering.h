@@ -461,6 +461,16 @@ public:
   Align getFunctionParamOptimizedAlign(const Function *F, Type *ArgTy,
                                        const DataLayout &DL) const;
 
+  /// Helper for computing alignment of a device function byval parameter.
+  Align getFunctionByValParamAlign(const Function *F, Type *ArgTy,
+                                   Align InitialAlign,
+                                   const DataLayout &DL) const;
+
+  // Helper for getting a function parameter name. Name is composed from
+  // its index and the function name. Negative index corresponds to special
+  // parameter (unsized array) used for passing variable arguments.
+  std::string getParamName(const Function *F, int Idx) const;
+
   /// isLegalAddressingMode - Return true if the addressing mode represented
   /// by AM is legal for this target, for a load/store of the specified type
   /// Used to guide target specific optimizations, like loop strength

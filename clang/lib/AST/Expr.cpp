@@ -37,6 +37,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstring>
+#include <optional>
 using namespace clang;
 
 const Expr *Expr::getBestDynamicClassTypeExpr() const {
@@ -644,7 +645,7 @@ std::string SYCLUniqueStableNameExpr::ComputeName(ASTContext &Context) const {
 std::string SYCLUniqueStableNameExpr::ComputeName(ASTContext &Context,
                                                   QualType Ty) {
   auto MangleCallback = [](ASTContext &Ctx,
-                           const NamedDecl *ND) -> llvm::Optional<unsigned> {
+                           const NamedDecl *ND) -> std::optional<unsigned> {
     if (const auto *RD = dyn_cast<CXXRecordDecl>(ND))
       return RD->getDeviceLambdaManglingNumber();
     return std::nullopt;
@@ -2238,6 +2239,8 @@ StringRef SourceLocExpr::getBuiltinStr() const {
   switch (getIdentKind()) {
   case File:
     return "__builtin_FILE";
+  case FileName:
+    return "__builtin_FILE_NAME";
   case Function:
     return "__builtin_FUNCTION";
   case Line:
@@ -2276,6 +2279,14 @@ APValue SourceLocExpr::EvaluateInContext(const ASTContext &Ctx,
   };
 
   switch (getIdentKind()) {
+  case SourceLocExpr::FileName: {
+    // __builtin_FILE_NAME() is a Clang-specific extension that expands to the
+    // the last part of __builtin_FILE().
+    SmallString<256> FileName;
+    clang::Preprocessor::processPathToFileName(
+        FileName, PLoc, Ctx.getLangOpts(), Ctx.getTargetInfo());
+    return MakeStringLiteral(FileName);
+  }
   case SourceLocExpr::File: {
     SmallString<256> Path(PLoc.getFilename());
     clang::Preprocessor::processPathForFileMacro(Path, Ctx.getLangOpts(),

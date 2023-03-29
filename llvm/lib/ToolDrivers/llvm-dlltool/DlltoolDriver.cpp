@@ -11,7 +11,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ToolDrivers/llvm-dlltool/DlltoolDriver.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Object/COFFImportFile.h"
@@ -19,9 +18,10 @@
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/Path.h"
+#include "llvm/TargetParser/Host.h"
 
+#include <optional>
 #include <vector>
 
 using namespace llvm;
@@ -38,11 +38,13 @@ enum {
 };
 
 #define PREFIX(NAME, VALUE)                                                    \
-  static constexpr std::initializer_list<StringLiteral> NAME = VALUE;
+  static constexpr StringLiteral NAME##_init[] = VALUE;                        \
+  static constexpr ArrayRef<StringLiteral> NAME(NAME##_init,                   \
+                                                std::size(NAME##_init) - 1);
 #include "Options.inc"
 #undef PREFIX
 
-static constexpr std::initializer_list<opt::OptTable::Info> InfoTable = {
+static constexpr opt::OptTable::Info InfoTable[] = {
 #define OPTION(X1, X2, ID, KIND, GROUP, ALIAS, X7, X8, X9, X10, X11, X12)      \
   {X1, X2, X10,         X11,         OPT_##ID, llvm::opt::Option::KIND##Class, \
    X9, X8, OPT_##GROUP, OPT_##ALIAS, X7,       X12},
@@ -50,9 +52,9 @@ static constexpr std::initializer_list<opt::OptTable::Info> InfoTable = {
 #undef OPTION
 };
 
-class DllOptTable : public llvm::opt::OptTable {
+class DllOptTable : public opt::GenericOptTable {
 public:
-  DllOptTable() : OptTable(InfoTable, false) {}
+  DllOptTable() : opt::GenericOptTable(InfoTable, false) {}
 };
 
 // Opens a file. Path has to be resolved already.
