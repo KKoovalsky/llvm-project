@@ -18,6 +18,7 @@ add_clang_library(clangDaemonTweaks OBJECT
   DefineInline.cpp
   DefineOutline.cpp
   ExpandAutoType.cpp
+  DoDummyStuff.cpp
   ExpandMacro.cpp
   ExtractFunction.cpp
   ExtractVariable.cpp

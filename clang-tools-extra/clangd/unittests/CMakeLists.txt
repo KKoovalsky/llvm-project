@@ -114,6 +114,7 @@ add_unittest(ClangdUnitTests ClangdTests
   tweaks/DumpASTTests.cpp
   tweaks/DumpRecordLayoutTests.cpp
   tweaks/DumpSymbolTests.cpp
+  tweaks/DoDummyStuffTests.cpp
   tweaks/ExpandAutoTypeTests.cpp
   tweaks/ExpandMacroTests.cpp
   tweaks/ExtractFunctionTests.cpp
