@@ -735,6 +735,23 @@ void wrapper() {
     int r{extracted(a, b, c, d, e, f)};
 }
       )cpp"},
+      // Sugarizes std::string
+      {
+          R"cpp(
+#include <string>
+std::string one() { return "one"; }
+std::string two() { return "two"; }
+std::string extracted() {
+return one() + two();
+}
+void wrapper() { auto s{extracted()}; }
+      )cpp",
+          R"cpp(
+#include <string>
+std::string one() { return "one"; }
+std::string two() { return "two"; }
+void wrapper() { auto s{[[one() + two()]]}; }
+      )cpp"},
       // SUBEXPRESSIONS
       // Left-aligned subexpression
       {R"cpp(

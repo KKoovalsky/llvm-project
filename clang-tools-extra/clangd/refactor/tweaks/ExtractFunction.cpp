@@ -1050,6 +1050,9 @@ generateReturnProperties(const ExtractionZone &ExtZone,
       if (const auto *Call{llvm::dyn_cast_or_null<CallExpr>(Expression)};
           Call) {
         const auto &ASTCont{ExtZone.EnclosingFunction->getParentASTContext()};
+        auto R{Call->getCallReturnType(ASTCont)};
+        R.dump();
+        R.getCanonicalType().dump();
         return Call->getCallReturnType(ASTCont);
       }
       return Expression->getType();
